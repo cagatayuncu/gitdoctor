@@ -5,10 +5,10 @@ that can follow a markdown playbook and run bash). Classic git-flow model:
 `main` + `develop`, `feature/*`, `release/x.y.z`, `hotfix/x.y.z`, SemVer tags
 on main.
 
-**Tek komutla:** feature/release/hotfix aç-bitir, anomali taraması (doctor),
-hizalama kontrolü (main↔develop, lokal↔origin, sürüm dosyası↔tag), SemVer
-tagleme + CHANGELOG + GitHub Release, branch-protection farkındalıklı
-PR/lokal merge.
+**One command each:** start/finish feature, release and hotfix branches; scan
+the repo for anomalies (doctor); verify alignment (main↔develop, local↔origin,
+version file↔tag); SemVer tagging + CHANGELOG + GitHub Release; and
+branch-protection-aware PR/local merging.
 
 ## What's inside
 
