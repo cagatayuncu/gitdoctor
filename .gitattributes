@@ -1,0 +1,12 @@
+# Bash must stay LF even on Windows checkouts (Git Bash refuses CRLF shebangs).
+* text=auto
+*.sh text eol=lf
+tests/stubs/gh text eol=lf
+# Stub replay fixtures are read verbatim by bash string compares — a CRLF
+# checkout would leak \r into values like "true"/"false".
+tests/fixtures/** text eol=lf
+*.md text
+*.json text
+*.yml text
+*.ps1 text eol=crlf
+*.png binary

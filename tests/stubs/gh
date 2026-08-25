@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Test stub for the GitHub CLI. Replays canned responses from $GH_STUB_DIR.
+# Unknown invocations exit 99 so tests fail loudly instead of silently passing.
+set -u
+
+args="$*"
+
+if [ "${GH_STUB_FAIL:-}" = "auth" ] && [ "${1:-}" = "auth" ]; then
+  echo "gh-stub: simulated auth failure" >&2
+  exit 1
+fi
+
+say() { cat "${GH_STUB_DIR:?}/$1" 2>/dev/null || true; }
+
+case "$args" in
+  "auth status")
+    exit 0 ;;
+  api\ repos/*/branches/*\ --jq\ .protected)
+    case "$args" in
+      */branches/main\ --jq\ .protected) say protection-main.txt ;;
+      */branches/develop\ --jq\ .protected) say protection-develop.txt ;;
+      *) say protection-other.txt ;;
+    esac ;;
+  repo\ view\ --json\ defaultBranchRef*)
+    say default-branch.txt ;;
+  repo\ view\ --json\ mergeCommitAllowed*)
+    say merge-methods.txt ;;
+  pr\ list\ --head\ *)
+    say pr-merged-for-head.txt ;;
+  pr\ list\ --state\ merged\ --limit\ 100*)
+    say merged-heads.txt ;;
+  pr\ list\ --base\ *\ --state\ merged*)
+    say merged-main-prs.txt ;;
+  pr\ list\ --state\ open*)
+    say open-prs.txt ;;
+  release\ view\ *)
+    say release-view.txt ;;
+  *)
+    echo "gh-stub: unmatched invocation: gh $args" >&2
+    exit 99 ;;
+esac

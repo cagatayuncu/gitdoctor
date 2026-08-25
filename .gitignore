@@ -1,0 +1,9 @@
+*.log
+.DS_Store
+
+# Internal marketing pipeline (machine-specific paths + unpublished drafts) —
+# deliberately kept out of the public repo.
+marketing/
+marketing.config.json
+.claude/
+.cursor/

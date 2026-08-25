@@ -1,0 +1,26 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test suite (Git Bash on Windows enforces portability)
+        shell: bash
+        run: bash tests/run-tests.sh
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y shellcheck
+          shellcheck scripts/gitflow-doctor.sh tests/run-tests.sh tests/lib/*.sh tests/stubs/gh install.sh
