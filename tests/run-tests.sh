@@ -15,6 +15,7 @@ JOBS=${JOBS:-8}
 if [ $# -gt 0 ]; then
   tests=$(printf '%s\n' "$@")
 else
+  # shellcheck disable=SC2012 # deliberate: ls over find (test names are ASCII; avoids Windows find.exe ambiguity)
   tests=$(ls t/doctor/*.sh t/probes/*.sh t/dryrun/*.sh 2>/dev/null | sort)
 fi
 

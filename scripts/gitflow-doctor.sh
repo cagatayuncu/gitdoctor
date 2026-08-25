@@ -300,6 +300,7 @@ if [ -z "$BOOT" ]; then
   local_cwd=$PWD
   json_str_v jcwd "$local_cwd"
   json_arr_v FIXC "git init" "cd <your-repo>"
+  # shellcheck disable=SC2154 # jcwd/FIXC are assigned via printf -v inside the helpers
   fail_check env-not-a-repo critical "not inside a git work tree" "\"cwd\":\"$jcwd\"" "$FIXC" env-not-a-repo
   finish_exit
 fi
@@ -1248,10 +1249,10 @@ else
       if git merge-base --is-ancestor "$ref" "$R_DEV" 2>/dev/null; then
         method=ancestry
       elif [ "$GH_MODE" = 1 ] && [ -n "$GH_MERGED_HEADS" ]; then
-        case "$NL$GH_MERGED_HEADS$NL" in *"$NL$br$NL"*) method=gh-pr; delflag="-D" ;; esac
+        case "$NL$GH_MERGED_HEADS$NL" in *"$NL$br$NL"*) method="gh-pr"; delflag="-D" ;; esac
       fi
       if [ -z "$method" ] && content_absorbed_into_dev "$ref"; then
-        method=content-equivalent; conf=medium; delflag="-D"
+        method="content-equivalent"; conf=medium; delflag="-D"
       fi
       json_str_v J "$br"
       if [ -n "$method" ]; then

@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034 # DOCTOR_EXIT/PROBE_EXIT are consumed by the sourcing test files
 # Test harness: full environment isolation + fixture repo builders.
 # Sourced by every test file. Requires TESTTMP and SKILL_ROOT (set by run-tests.sh).
 set -eu
