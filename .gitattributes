@@ -5,6 +5,9 @@ tests/stubs/gh text eol=lf
 # Stub replay fixtures are read verbatim by bash string compares — a CRLF
 # checkout would leak \r into values like "true"/"false".
 tests/fixtures/** text eol=lf
+# Hook files have no .sh extension but must land LF wherever they are copied
+# (a CRLF shebang breaks on Linux servers).
+integrations/hooks/* text eol=lf
 *.md text
 *.json text
 *.yml text
