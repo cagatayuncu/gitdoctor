@@ -1,0 +1,78 @@
+name: gitdoctor-scheduled
+
+# Copy into YOUR repo as .github/workflows/gitdoctor-scheduled.yml.
+# Runs the doctor on a schedule; on critical findings it opens (or updates)
+# a single tracking issue so drift gets seen without anyone remembering to look.
+on:
+  schedule:
+    - cron: "17 6 * * 1-5" # weekday mornings, 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GITDOCTOR_REPO: https://github.com/cagatayuncu/gitdoctor
+  GITDOCTOR_REF: main
+  ISSUE_TITLE: "gitdoctor: critical findings"
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all branches and tags
+        run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
+
+      - name: Get gitdoctor
+        run: git clone --depth 1 --branch "$GITDOCTOR_REF" "$GITDOCTOR_REPO" "$RUNNER_TEMP/gitdoctor"
+
+      - name: Run gitdoctor
+        id: doctor
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          bash "$RUNNER_TEMP/gitdoctor/scripts/gitflow-doctor.sh" --format json --no-fetch >"$RUNNER_TEMP/report.json"
+          echo "exit=$?" >>"$GITHUB_OUTPUT"
+          cp "$RUNNER_TEMP/report.json" report.json
+          cat report.json
+
+      - name: Open or update the tracking issue on criticals
+        if: steps.doctor.outputs.exit >= 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          BODY=$(mktemp)
+          {
+            echo "gitdoctor found critical issues on \`$(git rev-parse --abbrev-ref HEAD)\` ($(date -u +%F)):"
+            echo
+            echo '```json'
+            jq '{summary, findings: [.findings[] | select(.severity == "critical" and .status == "fail") | {id, title, fix}]}' report.json
+            echo '```'
+            echo
+            echo "_Recipes: references/fix-recipes.md in the gitdoctor repo._"
+          } >"$BODY"
+          existing=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$BODY"
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file "$BODY"
+          fi
+
+      - name: Close the tracking issue when clean
+        if: steps.doctor.outputs.exit < 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          existing=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "gitdoctor: clean again."
+          fi

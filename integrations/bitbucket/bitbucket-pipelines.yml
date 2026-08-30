@@ -1,0 +1,35 @@
+# gitdoctor on Bitbucket pull requests — DRAFT (not yet exercised on a live
+# Bitbucket workspace; the doctor itself is platform-neutral, this wiring is not).
+#
+# Merge the pull-requests section into your bitbucket-pipelines.yml. Posting
+# the PR comment needs an app password with `pullrequest:write` in
+# GITDOCTOR_BB_USER / GITDOCTOR_BB_APP_PASSWORD (repository variables);
+# without them the step still gates on exit code.
+pipelines:
+  pull-requests:
+    "**":
+      - step:
+          name: gitdoctor
+          image: alpine:3.20
+          clone:
+            depth: full
+          script:
+            - apk add --no-cache bash git curl jq
+            - git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
+            - git clone --depth 1 https://github.com/cagatayuncu/gitdoctor /tmp/gitdoctor
+            - set +e
+            - bash /tmp/gitdoctor/scripts/gitflow-doctor.sh --format json --no-fetch --skip detached-head > report.json
+            - status=$?
+            - set -e
+            - jq . report.json
+            - |
+              if [ -n "${GITDOCTOR_BB_USER:-}" ] && [ -n "${GITDOCTOR_BB_APP_PASSWORD:-}" ]; then
+                crit=$(jq -r '.summary.critical' report.json)
+                warn=$(jq -r '.summary.warning' report.json)
+                text="gitdoctor: ${crit} critical, ${warn} warning(s).$(jq -r '.findings[] | select(.status=="fail") | "\n- [" + .severity + "] " + .id + ": " + .title' report.json)"
+                payload=$(jq -n --arg t "$text" '{content: {raw: $t}}')
+                curl -sS -X POST -u "$GITDOCTOR_BB_USER:$GITDOCTOR_BB_APP_PASSWORD" \
+                  -H 'Content-Type: application/json' -d "$payload" \
+                  "https://api.bitbucket.org/2.0/repositories/$BITBUCKET_REPO_FULL_NAME/pullrequests/$BITBUCKET_PR_ID/comments" >/dev/null
+              fi
+            - test "$status" -lt 2

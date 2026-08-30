@@ -23,4 +23,6 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update -q && sudo apt-get install -y shellcheck
-          shellcheck scripts/gitflow-doctor.sh tests/run-tests.sh tests/lib/*.sh tests/stubs/gh install.sh
+          shellcheck scripts/gitflow-doctor.sh tests/run-tests.sh tests/lib/*.sh tests/stubs/gh install.sh \
+            integrations/hooks/pre-receive integrations/hooks/pre-push \
+            integrations/watcher/gitdoctor-watch.sh integrations/github-actions/comment.sh

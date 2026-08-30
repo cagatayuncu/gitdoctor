@@ -1,0 +1,50 @@
+name: gitdoctor-pr
+
+# PR gate: runs the read-only doctor on every pull request and posts the
+# findings as a single, self-updating comment. Criticals fail the check, so
+# marking this job "required" in branch protection blocks the merge button.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all branches and tags
+        run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
+
+      - name: Run gitdoctor
+        id: doctor
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }} # lets the doctor's GitHub-side checks run
+        run: |
+          set +e
+          # Report goes OUTSIDE the worktree (a file in the tree would trip
+          # dirty-worktree); detached-head is expected noise on a PR merge ref.
+          bash scripts/gitflow-doctor.sh --format json --no-fetch --skip detached-head >"$RUNNER_TEMP/report.json"
+          echo "exit=$?" >>"$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/report.json"
+
+      - name: Comment findings on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: bash integrations/github-actions/comment.sh "$RUNNER_TEMP/report.json" "${{ github.event.pull_request.number }}"
+
+      - name: Gate on criticals
+        shell: bash
+        run: |
+          if [ "${{ steps.doctor.outputs.exit }}" -ge 2 ]; then
+            echo "gitdoctor found critical issues - see the PR comment."
+            exit 1
+          fi
