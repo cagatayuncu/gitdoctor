@@ -1,0 +1,61 @@
+name: gitdoctor-pr
+
+# Copy this file into YOUR repo as .github/workflows/gitdoctor-pr.yml.
+# It clones gitdoctor at runtime, scans the PR, posts a self-updating comment,
+# and fails the check on critical findings (make it "required" in branch
+# protection to block the merge button).
+#
+# Optional: pin GITDOCTOR_REF to a tag once releases exist.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  GITDOCTOR_REPO: https://github.com/cagatayuncu/gitdoctor
+  GITDOCTOR_REF: main
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all branches and tags
+        run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
+
+      - name: Get gitdoctor
+        run: |
+          git clone --depth 1 --branch "$GITDOCTOR_REF" "$GITDOCTOR_REPO" "$RUNNER_TEMP/gitdoctor"
+
+      - name: Run gitdoctor
+        id: doctor
+        shell: bash
+        run: |
+          set +e
+          # PR checkouts are a detached merge ref: detached-head is expected noise.
+          bash "$RUNNER_TEMP/gitdoctor/scripts/gitflow-doctor.sh" \
+            --format json --no-fetch --skip detached-head >report.json
+          echo "exit=$?" >>"$GITHUB_OUTPUT"
+          cat report.json
+
+      - name: Comment findings on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          bash "$RUNNER_TEMP/gitdoctor/integrations/github-actions/comment.sh" \
+            report.json "${{ github.event.pull_request.number }}"
+
+      - name: Gate on criticals
+        shell: bash
+        run: |
+          if [ "${{ steps.doctor.outputs.exit }}" -ge 2 ]; then
+            echo "gitdoctor found critical issues - see the PR comment."
+            exit 1
+          fi

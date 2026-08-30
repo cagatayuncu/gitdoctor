@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# gitdoctor pre-receive gate — for SELF-HOSTED bare repositories (Gitea,
+# GitLab self-managed custom hooks, plain SSH remotes). GitHub.com does not
+# run pre-receive hooks (GitHub Enterprise Server does).
+#
+# Install: copy into <bare-repo>/hooks/pre-receive and chmod +x.
+#
+# Scope: the full doctor needs a work tree; a pre-receive hook runs in a bare
+# repo against quarantined objects, so this hook enforces the two gates that
+# matter most at push time, inline and dependency-free:
+#   1. wrong-base-hotfix  — a hotfix/* ref carrying develop-only commits
+#   2. wrong-base-release — a release/* ref carrying main-only commits
+#      (cut from main instead of develop after a missed back-merge)
+#   3. release/hotfix branch names must be bare X.Y.Z
+#
+# Config via env (set in the hook environment or edit the defaults):
+#   GITDOCTOR_MAIN (default: main, falls back to master if only master exists)
+#   GITDOCTOR_DEVELOP (default: develop)
+#   GITDOCTOR_SKIP=1 disables the gate for one push (server-side escape hatch).
+set -u
+
+[ -n "${GITDOCTOR_SKIP:-}" ] && exit 0
+
+MAIN=${GITDOCTOR_MAIN:-main}
+DEVELOP=${GITDOCTOR_DEVELOP:-develop}
+if ! git show-ref --verify --quiet "refs/heads/$MAIN"; then
+  if git show-ref --verify --quiet refs/heads/master; then MAIN=master; else exit 0; fi
+fi
+git show-ref --verify --quiet "refs/heads/$DEVELOP" || exit 0
+
+ZERO=0000000000000000000000000000000000000000
+VERSION_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
+fail=0
+
+reject() {
+  echo "gitdoctor: REJECTED $1" >&2
+  echo "gitdoctor:   $2" >&2
+  fail=1
+}
+
+while read -r _old new ref; do
+  [ "$new" = "$ZERO" ] && continue # deletions are fine
+  case "$ref" in
+    refs/heads/hotfix/*)
+      ver=${ref#refs/heads/hotfix/}
+      if ! [[ $ver =~ $VERSION_RE ]]; then
+        reject "$ref" "hotfix branch names must be hotfix/X.Y.Z"
+      fi
+      mb=$(git merge-base "refs/heads/$DEVELOP" "$new" 2>/dev/null) || continue
+      cnt=$(git rev-list --count "refs/heads/$MAIN..$mb" 2>/dev/null) || continue
+      if [ "${cnt:-0}" -gt 0 ]; then
+        reject "$ref" "wrong-base-hotfix: carries $cnt $DEVELOP-only commit(s); cut it from $MAIN (finishing it would ship unreleased work)"
+      fi
+      ;;
+    refs/heads/release/*)
+      ver=${ref#refs/heads/release/}
+      if ! [[ $ver =~ $VERSION_RE ]]; then
+        reject "$ref" "release branch names must be release/X.Y.Z"
+      fi
+      mb=$(git merge-base "refs/heads/$MAIN" "$new" 2>/dev/null) || continue
+      cnt=$(git rev-list --count "refs/heads/$DEVELOP..$mb" 2>/dev/null) || continue
+      if [ "${cnt:-0}" -gt 0 ]; then
+        reject "$ref" "wrong-base-release: carries $cnt $MAIN-only commit(s); cut it from $DEVELOP (back-merge $MAIN first)"
+      fi
+      ;;
+  esac
+done
+
+if [ "$fail" = 1 ]; then
+  echo "gitdoctor: push rejected. Full scan + fix recipes: https://github.com/cagatayuncu/gitdoctor" >&2
+  exit 1
+fi
+exit 0

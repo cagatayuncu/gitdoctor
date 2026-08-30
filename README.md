@@ -74,6 +74,15 @@ Adds `.cursor/commands/gitdoctor.md` (+ the skill payload) to that repo →
 Add `--dry-run` to any mutating command: reads run, every mutation is printed
 as `DRY-RUN: <argv>` instead of executed.
 
+## Integrations
+
+The doctor's JSON output + exit codes plug into anything: a **GitHub Actions
+PR bot** (live on this repo — one self-updating comment per PR, criticals
+block the merge), a scheduled scan that files an issue, client `pre-push` and
+server `pre-receive` hooks (both covered by the fixture suite), a cron
+watcher for repos with no CI, and GitLab/Bitbucket drafts. See
+[integrations/](integrations/README.md).
+
 ## The doctor
 
 ```bash
