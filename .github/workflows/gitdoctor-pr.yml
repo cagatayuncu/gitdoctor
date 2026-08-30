@@ -25,18 +25,21 @@ jobs:
       - name: Run gitdoctor
         id: doctor
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }} # lets the doctor's GitHub-side checks run
         run: |
           set +e
-          # PR checkouts are a detached merge ref: detached-head is expected noise.
-          bash scripts/gitflow-doctor.sh --format json --no-fetch --skip detached-head >report.json
+          # Report goes OUTSIDE the worktree (a file in the tree would trip
+          # dirty-worktree); detached-head is expected noise on a PR merge ref.
+          bash scripts/gitflow-doctor.sh --format json --no-fetch --skip detached-head >"$RUNNER_TEMP/report.json"
           echo "exit=$?" >>"$GITHUB_OUTPUT"
-          cat report.json
+          cat "$RUNNER_TEMP/report.json"
 
       - name: Comment findings on the PR
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: bash integrations/github-actions/comment.sh report.json "${{ github.event.pull_request.number }}"
+        run: bash integrations/github-actions/comment.sh "$RUNNER_TEMP/report.json" "${{ github.event.pull_request.number }}"
 
       - name: Gate on criticals
         shell: bash

@@ -26,6 +26,7 @@ BODY=$(mktemp)
   else
     printf '## 🟢 gitdoctor: clean\n\n'
   fi
+  # shellcheck disable=SC2016 # literal markdown backticks, nothing to expand
   printf '`%s critical · %s warning · %s info · %s ok`\n\n' "$crit" "$warn" "$info" "$ok"
 
   if jq -e '.findings | length > 0' "$REPORT" >/dev/null; then

@@ -34,10 +34,13 @@ jobs:
       - name: Run gitdoctor
         id: doctor
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          bash "$RUNNER_TEMP/gitdoctor/scripts/gitflow-doctor.sh" --format json --no-fetch >report.json
+          bash "$RUNNER_TEMP/gitdoctor/scripts/gitflow-doctor.sh" --format json --no-fetch >"$RUNNER_TEMP/report.json"
           echo "exit=$?" >>"$GITHUB_OUTPUT"
+          cp "$RUNNER_TEMP/report.json" report.json
           cat report.json
 
       - name: Open or update the tracking issue on criticals
