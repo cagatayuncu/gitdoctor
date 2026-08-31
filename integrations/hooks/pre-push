@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# gitdoctor pre-push gate — runs the doctor's preflight safety set before every
+# push and blocks on critical findings. Works against any host (the check is
+# local), on every platform with Git Bash.
+#
+# Install (per repo): copy into .git/hooks/pre-push and chmod +x.
+#
+# Locating the doctor, first match wins:
+#   1. $GITDOCTOR_PATH (full path to gitflow-doctor.sh)
+#   2. ~/.claude/skills/gitdoctor/scripts/gitflow-doctor.sh (skill install)
+#   3. gitflow-doctor.sh on PATH
+#
+# Escape hatch for a deliberate exception: GITDOCTOR_SKIP=1 git push ...
+# Note: this scans the REPO state, not just the pushed ref — an unrelated
+# critical (e.g. a tag sha mismatch) also blocks, which is the point.
+set -u
+
+[ -n "${GITDOCTOR_SKIP:-}" ] && exit 0
+
+DOCTOR=""
+if [ -n "${GITDOCTOR_PATH:-}" ] && [ -f "$GITDOCTOR_PATH" ]; then
+  DOCTOR=$GITDOCTOR_PATH
+elif [ -f "$HOME/.claude/skills/gitdoctor/scripts/gitflow-doctor.sh" ]; then
+  DOCTOR="$HOME/.claude/skills/gitdoctor/scripts/gitflow-doctor.sh"
+elif command -v gitflow-doctor.sh >/dev/null 2>&1; then
+  DOCTOR=$(command -v gitflow-doctor.sh)
+else
+  echo "gitdoctor pre-push: doctor script not found (set GITDOCTOR_PATH); allowing push" >&2
+  exit 0
+fi
+
+PREFLIGHT="dirty-worktree,operation-in-progress,sync-diverged,wrong-base-feature,wrong-base-hotfix,release-version-collision,tag-sha-mismatch,branch-bad-version-name"
+
+REPORT=$(mktemp)
+trap 'rm -f "$REPORT"' EXIT
+bash "$DOCTOR" --format jsonl --no-fetch --checks "$PREFLIGHT" >"$REPORT" 2>/dev/null
+status=$?
+
+if [ "$status" -ge 2 ]; then
+  echo "" >&2
+  echo "gitdoctor: push blocked - critical finding(s):" >&2
+  grep '"severity":"critical"' "$REPORT" \
+    | sed -n 's/.*"title":"\([^"]*\)".*/  - \1/p' >&2
+  echo "" >&2
+  echo "Details: run the doctor, or bypass ONCE with: GITDOCTOR_SKIP=1 git push ..." >&2
+  exit 1
+fi
+exit 0
