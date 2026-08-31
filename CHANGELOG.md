@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 (2026-08-30)
+
+### Fixes
+- Action metadata for GitHub Marketplace validation: unique listing name
+  ("gitdoctor - Git Flow health gate") and a description under 125 characters.
+  The `uses: cagatayuncu/gitdoctor@<tag>` path is unchanged.
+
 ## 0.2.0 (2026-08-30)
 
 Distribution release: one-line PR bot, plugin packaging, hooks.
