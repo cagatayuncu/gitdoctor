@@ -1,5 +1,9 @@
 # gitdoctor
 
+[![ci](https://github.com/cagatayuncu/gitdoctor/actions/workflows/ci.yml/badge.svg)](https://github.com/cagatayuncu/gitdoctor/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/cagatayuncu/gitdoctor)](https://github.com/cagatayuncu/gitdoctor/releases)
+[![license](https://img.shields.io/github/license/cagatayuncu/gitdoctor)](LICENSE)
+
 One-command Git Flow for AI coding agents (Claude Code, Cursor, and anything
 that can follow a markdown playbook and run bash). Classic git-flow model:
 `main` + `develop`, `feature/*`, `release/x.y.z`, `hotfix/x.y.z`, SemVer tags
