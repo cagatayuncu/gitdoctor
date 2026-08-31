@@ -43,14 +43,23 @@ Requirements: git ≥ 2.38 recommended (≥ 2.30 works with degraded conflict
 prediction), bash (Git Bash on Windows), optional `gh` (authenticated) for
 PR mode + GitHub checks. No jq needed.
 
-### Claude Code (user-level skill)
+### Claude Code — as a plugin (recommended)
+
+```
+/plugin marketplace add cagatayuncu/claude-plugins
+/plugin install gitdoctor@cagatayuncu
+```
+
+Then in any repo: `/gitdoctor doctor`, `/gitdoctor start release`,
+`/gitdoctor finish`, …
+
+### Claude Code — as a user-level skill
 
 ```bash
 ./install.sh            # or .\install.ps1 on Windows
 ```
 
-Installs to `~/.claude/skills/gitdoctor/`. Then in any repo:
-`/gitdoctor doctor`, `/gitdoctor start release`, `/gitdoctor finish`, …
+Installs to `~/.claude/skills/gitdoctor/`. Same commands as above.
 
 ### Cursor
 
