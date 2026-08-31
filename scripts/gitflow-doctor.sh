@@ -23,7 +23,7 @@ set -f # no pathname expansion: ref names may contain *?[ and several list
 LC_ALL=C
 export LC_ALL
 
-DOCTOR_VERSION="0.1.0"
+DOCTOR_VERSION="0.2.0"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 RELEASE_NAME_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 RELEASE_NAME_PRE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'

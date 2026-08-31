@@ -1,5 +1,9 @@
 # gitdoctor
 
+[![ci](https://github.com/cagatayuncu/gitdoctor/actions/workflows/ci.yml/badge.svg)](https://github.com/cagatayuncu/gitdoctor/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/cagatayuncu/gitdoctor)](https://github.com/cagatayuncu/gitdoctor/releases)
+[![license](https://img.shields.io/github/license/cagatayuncu/gitdoctor)](LICENSE)
+
 One-command Git Flow for AI coding agents (Claude Code, Cursor, and anything
 that can follow a markdown playbook and run bash). Classic git-flow model:
 `main` + `develop`, `feature/*`, `release/x.y.z`, `hotfix/x.y.z`, SemVer tags
@@ -15,7 +19,7 @@ branch-protection-aware PR/local merging.
 | Piece | Role |
 |---|---|
 | `SKILL.md` | Agent playbook: command routing, gates, dry-run contract, safety rails |
-| `scripts/gitflow-doctor.sh` | The only executable: ~40 read-only checks + finish probes, JSON out |
+| `scripts/gitflow-doctor.sh` | The only executable: 42 read-only checks + finish probes, JSON out |
 | `references/*.md` | Choreographies (finish release/hotfix/feature, init/start), fix recipes, config schema |
 | `adapters/cursor/` | Cursor `/gitdoctor` command wrapper |
 | `tests/` | Fixture-based suite: every check has a scratch-repo test; probes and read-only guarantees included |
@@ -39,14 +43,23 @@ Requirements: git ≥ 2.38 recommended (≥ 2.30 works with degraded conflict
 prediction), bash (Git Bash on Windows), optional `gh` (authenticated) for
 PR mode + GitHub checks. No jq needed.
 
-### Claude Code (user-level skill)
+### Claude Code — as a plugin (recommended)
+
+```
+/plugin marketplace add cagatayuncu/claude-plugins
+/plugin install gitdoctor@cagatayuncu
+```
+
+Then in any repo: `/gitdoctor doctor`, `/gitdoctor start release`,
+`/gitdoctor finish`, …
+
+### Claude Code — as a user-level skill
 
 ```bash
 ./install.sh            # or .\install.ps1 on Windows
 ```
 
-Installs to `~/.claude/skills/gitdoctor/`. Then in any repo:
-`/gitdoctor doctor`, `/gitdoctor start release`, `/gitdoctor finish`, …
+Installs to `~/.claude/skills/gitdoctor/`. Same commands as above.
 
 ### Cursor
 
@@ -91,7 +104,7 @@ bash scripts/gitflow-doctor.sh --checks missing-back-merge,tag-unpushed
 bash scripts/gitflow-doctor.sh --probe finish-release --branch release/1.2.0 --version 1.2.0
 ```
 
-Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. ~40 checks across environment,
+Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. 42 checks across environment,
 worktree, local↔origin sync, git-flow topology (missing back-merge, wrong
 base, orphaned/colliding releases), tags (unpushed, sha-mismatch, duplicates,
 lightweight), branch hygiene (stale/squash-merged), and GitHub (protection,

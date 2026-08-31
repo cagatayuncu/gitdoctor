@@ -1,0 +1,90 @@
+name: "gitdoctor"
+description: "Git Flow health gate: 42 read-only repo checks (wrong-base branches, missing back-merges, tag drift) with fix recipes and an optional self-updating PR comment."
+author: "Çağatay UNCU"
+branding:
+  icon: "activity"
+  color: "green"
+
+# Requires a checkout with FULL history first (ancestry checks degrade on
+# shallow clones):
+#
+#   - uses: actions/checkout@v4
+#     with: { fetch-depth: 0 }
+#   - run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
+#   - uses: cagatayuncu/gitdoctor@v0.2.0
+#
+# For the PR comment, the job needs: permissions: { pull-requests: write }.
+
+inputs:
+  checks:
+    description: "Comma-separated check ids to run (empty = all 42)"
+    required: false
+    default: ""
+  skip:
+    description: "Comma-separated check ids to skip"
+    required: false
+    default: "detached-head" # PR checkouts are a detached merge ref
+  min-severity:
+    description: "info | warning | critical — findings below this are dropped"
+    required: false
+    default: "info"
+  comment:
+    description: "Post/update the single PR comment (pull_request events only)"
+    required: false
+    default: "true"
+  fail-on:
+    description: "critical | warning | never — when to fail the check"
+    required: false
+    default: "critical"
+  github-token:
+    description: "Token for the PR comment and GitHub-side checks"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: "Doctor exit: 0 clean, 1 warnings, 2 criticals"
+    value: ${{ steps.run.outputs.exit }}
+  report:
+    description: "Path to the JSON report"
+    value: ${{ steps.run.outputs.report }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run gitdoctor
+      id: run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set +e
+        args=(--format json --no-fetch)
+        [ -n "${{ inputs.checks }}" ] && args+=(--checks "${{ inputs.checks }}")
+        [ -n "${{ inputs.skip }}" ] && args+=(--skip "${{ inputs.skip }}")
+        args+=(--min-severity "${{ inputs.min-severity }}")
+        report="$RUNNER_TEMP/gitdoctor-report.json"
+        bash "${{ github.action_path }}/scripts/gitflow-doctor.sh" "${args[@]}" >"$report"
+        echo "exit=$?" >>"$GITHUB_OUTPUT"
+        echo "report=$report" >>"$GITHUB_OUTPUT"
+        cat "$report"
+
+    - name: Comment findings on the PR
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        bash "${{ github.action_path }}/integrations/github-actions/comment.sh" \
+          "${{ steps.run.outputs.report }}" "${{ github.event.pull_request.number }}"
+
+    - name: Gate
+      shell: bash
+      run: |
+        code="${{ steps.run.outputs.exit }}"
+        case "${{ inputs.fail-on }}" in
+          never) exit 0 ;;
+          warning) [ "$code" -ge 1 ] && { echo "gitdoctor: findings at warning+ severity."; exit 1; } ;;
+          *) [ "$code" -ge 2 ] && { echo "gitdoctor: critical findings - see the report/comment."; exit 1; } ;;
+        esac
+        exit 0

@@ -1,11 +1,12 @@
 name: gitdoctor-pr
 
 # Copy this file into YOUR repo as .github/workflows/gitdoctor-pr.yml.
-# It clones gitdoctor at runtime, scans the PR, posts a self-updating comment,
-# and fails the check on critical findings (make it "required" in branch
+# Every PR gets one self-updating comment with the findings and fix commands;
+# critical findings turn the check red (mark the job "required" in branch
 # protection to block the merge button).
 #
-# Optional: pin GITDOCTOR_REF to a tag once releases exist.
+# Pin to a release tag. Inputs (all optional): checks, skip, min-severity,
+# comment, fail-on, github-token — see the action's README section.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -14,51 +15,15 @@ permissions:
   contents: read
   pull-requests: write
 
-env:
-  GITDOCTOR_REPO: https://github.com/cagatayuncu/gitdoctor
-  GITDOCTOR_REF: main
-
 jobs:
   doctor:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # full history: ancestry checks degrade on shallow clones
 
       - name: Fetch all branches and tags
         run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
 
-      - name: Get gitdoctor
-        run: |
-          git clone --depth 1 --branch "$GITDOCTOR_REF" "$GITDOCTOR_REPO" "$RUNNER_TEMP/gitdoctor"
-
-      - name: Run gitdoctor
-        id: doctor
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }} # lets the doctor's GitHub-side checks run
-        run: |
-          set +e
-          # Report goes OUTSIDE the worktree (a file in the tree would trip
-          # dirty-worktree); detached-head is expected noise on a PR merge ref.
-          bash "$RUNNER_TEMP/gitdoctor/scripts/gitflow-doctor.sh" \
-            --format json --no-fetch --skip detached-head >"$RUNNER_TEMP/report.json"
-          echo "exit=$?" >>"$GITHUB_OUTPUT"
-          cat "$RUNNER_TEMP/report.json"
-
-      - name: Comment findings on the PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          bash "$RUNNER_TEMP/gitdoctor/integrations/github-actions/comment.sh" \
-            "$RUNNER_TEMP/report.json" "${{ github.event.pull_request.number }}"
-
-      - name: Gate on criticals
-        shell: bash
-        run: |
-          if [ "${{ steps.doctor.outputs.exit }}" -ge 2 ]; then
-            echo "gitdoctor found critical issues - see the PR comment."
-            exit 1
-          fi
+      - uses: cagatayuncu/gitdoctor@v0.2.0
