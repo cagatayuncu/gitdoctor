@@ -19,11 +19,21 @@ that runs the script + a channel that delivers the report.**
 
 ## GitHub Actions PR bot
 
-Copy `github-actions/gitdoctor-pr.yml` into your repo as
-`.github/workflows/gitdoctor-pr.yml`. Every PR gets one self-updating comment
-with the findings and fix commands; critical findings turn the check red.
-Mark the `doctor` job as a **required status check** in branch protection and
-the merge button locks until the finding is resolved.
+The repo root ships a composite action (`action.yml`), so the whole bot is
+one `uses:` line — copy `github-actions/gitdoctor-pr.yml` into your repo as
+`.github/workflows/gitdoctor-pr.yml`:
+
+```yaml
+- uses: cagatayuncu/gitdoctor@v0.2.0
+  # inputs (optional): checks, skip, min-severity, comment, fail-on, github-token
+```
+
+Every PR gets one self-updating comment with the findings and fix commands;
+critical findings turn the check red (`fail-on: warning` tightens that,
+`fail-on: never` makes it report-only). Mark the `doctor` job as a
+**required status check** in branch protection and the merge button locks
+until the finding is resolved. This repo's own `.github/workflows/gitdoctor-pr.yml`
+dogfoods the action via `uses: ./`.
 
 Notes:
 - `fetch-depth: 0` + the explicit branch fetch are required — ancestry checks

@@ -19,7 +19,7 @@ branch-protection-aware PR/local merging.
 | Piece | Role |
 |---|---|
 | `SKILL.md` | Agent playbook: command routing, gates, dry-run contract, safety rails |
-| `scripts/gitflow-doctor.sh` | The only executable: ~40 read-only checks + finish probes, JSON out |
+| `scripts/gitflow-doctor.sh` | The only executable: 42 read-only checks + finish probes, JSON out |
 | `references/*.md` | Choreographies (finish release/hotfix/feature, init/start), fix recipes, config schema |
 | `adapters/cursor/` | Cursor `/gitdoctor` command wrapper |
 | `tests/` | Fixture-based suite: every check has a scratch-repo test; probes and read-only guarantees included |
@@ -104,7 +104,7 @@ bash scripts/gitflow-doctor.sh --checks missing-back-merge,tag-unpushed
 bash scripts/gitflow-doctor.sh --probe finish-release --branch release/1.2.0 --version 1.2.0
 ```
 
-Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. ~40 checks across environment,
+Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. 42 checks across environment,
 worktree, local↔origin sync, git-flow topology (missing back-merge, wrong
 base, orphaned/colliding releases), tags (unpushed, sha-mismatch, duplicates,
 lightweight), branch hygiene (stale/squash-merged), and GitHub (protection,
