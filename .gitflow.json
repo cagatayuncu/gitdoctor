@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "versionFiles": [
+    {
+      "path": "scripts/gitflow-doctor.sh",
+      "pattern": "DOCTOR_VERSION=\"([^\"]+)\"",
+      "replace": "DOCTOR_VERSION=\"{version}\""
+    }
+  ],
+  "changelog": {
+    "enabled": true,
+    "file": "CHANGELOG.md",
+    "convention": "conventional-commits"
+  }
+}
