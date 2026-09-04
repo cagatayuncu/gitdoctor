@@ -11,6 +11,8 @@ that runs the script + a channel that delivers the report.**
 | GitHub Actions scheduled scan | Template | [github-actions/gitdoctor-scheduled.yml](github-actions/gitdoctor-scheduled.yml) |
 | Local `pre-push` hook | Tested (fixture suite) | [hooks/pre-push](hooks/pre-push) |
 | Server-side `pre-receive` hook | Tested (fixture suite) | [hooks/pre-receive](hooks/pre-receive) |
+| pre-commit framework | Hook definition, tested (fixture suite) | [.pre-commit-hooks.yaml](../.pre-commit-hooks.yaml) → [hooks/pre-push](hooks/pre-push) |
+| GitHub code scanning (SARIF) | Action input `sarif-file` | [action.yml](../action.yml), `--format sarif` |
 | Cron watcher (no CI at all) | Script | [watcher/gitdoctor-watch.sh](watcher/gitdoctor-watch.sh) |
 | GitLab CI | **Draft, untested on a live instance** | [gitlab/.gitlab-ci.yml](gitlab/.gitlab-ci.yml) |
 | Bitbucket Pipelines | **Draft, untested on a live workspace** | [bitbucket/bitbucket-pipelines.yml](bitbucket/bitbucket-pipelines.yml) |
@@ -41,6 +43,12 @@ Notes:
   to low confidence.
 - PR checkouts are a detached merge ref, so the workflow skips the
   `detached-head` check by design.
+- Code scanning: add `sarif-file: gitdoctor.sarif` and the action also uploads
+  the findings to GitHub code scanning (job needs
+  `permissions: security-events: write`; free on public repos, GitHub Advanced
+  Security on private ones). Alerts anchor on `.gitflow.json` and carry a
+  `check-id:key` fingerprint, so one finding stays one alert across runs until
+  it clears. Standalone: `gitflow-doctor.sh --format sarif`.
 
 ## Hooks
 
@@ -51,6 +59,17 @@ Notes:
   not just the pushed ref — an unrelated critical also blocks, on purpose.
   On Windows, per-process AV scanning can make the check take noticeable
   seconds; see the performance note in the main README.
+- **pre-commit framework:** the repo root ships `.pre-commit-hooks.yaml`, so
+  ```yaml
+  repos:
+    - repo: https://github.com/cagatayuncu/gitdoctor
+      rev: v0.3.0
+      hooks:
+        - id: gitdoctor-preflight
+  ```
+  plus `pre-commit install --hook-type pre-push` gives the same gate with
+  nothing to copy — the doctor ships inside the hook checkout and the hook
+  finds it there first.
 - **pre-receive (server-side, self-hosted only):** copy `hooks/pre-receive`
   into `<bare-repo>/hooks/pre-receive` on the server. The full doctor needs a
   work tree, so this hook enforces the push-time gates inline (wrong-base

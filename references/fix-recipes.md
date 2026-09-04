@@ -183,6 +183,20 @@ The version file on main disagrees with the latest tag. Normal cause: a finish
 that skipped the bump step. Align on the next finish, or hot-patch now via a
 hotfix branch that only bumps the file.
 
+## changelog-tag-mismatch
+The latest release tag has no heading in the changelog on main (or the file is
+missing there). Only enabled when `changelog.enabled` is true — the agent
+passes `--changelog <file>`. Headings match `## 1.2.0`, `## [1.2.0] - date`
+and `## v1.2.0`; a version mentioned only in body text does not count.
+Normally the release/hotfix finish writes the section before tagging; repair
+after the fact via a changelog-only hotfix branch:
+```bash
+git switch -c hotfix/X.Y.Z+1 main   # or fold it into the next hotfix
+# add "## X.Y.Z (date)" with the release notes to CHANGELOG.md
+gitdoctor finish
+```
+Set `changelog.enabled: false` in `.gitflow.json` if the repo keeps no changelog.
+
 ## tag-not-on-main
 A semver tag points at a commit not reachable from main — usually a finish
 that tagged before the merge landed, or a tag on develop. Resume the finish
@@ -208,6 +222,18 @@ Lightweight release tags carry no author/date/message. Future tags: always
 tag is recent and the team is warned (`git tag -d`, retag annotated,
 `git push -f origin <tag>` — the one sanctioned tag force-push, explicit
 user confirmation required).
+
+## tag-unsigned
+Only when `release.signedTags` is true (`--require-signed-tags`): a semver tag
+is lightweight or an annotated tag object without a GPG/SSH signature block.
+Sign future tags automatically and verify existing ones:
+```bash
+git config tag.gpgSign true          # every `git tag -a` becomes `git tag -s`
+git tag -v vX.Y.Z                    # check the signature of an existing tag
+```
+Re-signing a published tag means replacing it (`git tag -s -f` + force-push
+of that single tag) — coordinate with everyone who fetched it, and prefer
+leaving historic unsigned tags alone via `doctor.ignoreTags`.
 
 ## tag-unpushed
 `git push origin <tag>` — an unpushed release tag means CI/teammates cannot
@@ -249,6 +275,16 @@ gh api -X PUT "repos/<owner>/<repo>/branches/main/protection" \
 ```
 With protection on, finishes toward main automatically use PR mode.
 
+## gh-protection-missing-develop
+Same recipe as main, for the integration branch:
+```bash
+gh api -X PUT "repos/<owner>/<repo>/branches/develop/protection"   -F required_pull_request_reviews.required_approving_review_count=1   -F enforce_admins=false -F required_status_checks=null -F restrictions=null
+```
+Keep **merge commits allowed** in the repo settings: back-merges from main
+into a protected, squash-only develop lose ancestry (see
+`gh-squash-only-back-merge-limitation`). With protection on, finishes toward
+develop automatically use PR mode.
+
 ## gh-default-branch-unexpected
 `gh repo edit --default-branch develop` — so new PRs target develop by
 default. Skip if the team intentionally prefers main (set
@@ -264,3 +300,14 @@ permanently downgrades back-merge checking to content-equivalence. Either
 allow merge commits (`gh repo edit --enable-merge-commit`) or exempt develop
 from protection for back-merge PRs. Otherwise: no action, the degraded mode is
 handled automatically.
+
+## gh-release-missing-for-tag
+A semver tag reachable from main has no GitHub Release. The release/hotfix
+finish creates one per tag when `release.githubRelease` is true (the default);
+this catches tags pushed by hand or finishes interrupted before the last step.
+Create it from the existing tag — never let `gh release create` invent one:
+```bash
+gh release create vX.Y.Z --verify-tag --generate-notes --title vX.Y.Z
+```
+Repos that do not publish Releases set `release.githubRelease: false`
+(`--no-github-release`) and the check reports `skipped`.

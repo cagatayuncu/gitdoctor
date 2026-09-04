@@ -1,7 +1,7 @@
 # Marketplace listing name (must be globally unique; the `uses:` path stays
 # cagatayuncu/gitdoctor regardless) and a <125-char description.
 name: "gitdoctor - Git Flow health gate"
-description: "Git Flow health gate: 42 read-only repo checks with fix recipes and a self-updating PR comment."
+description: "Git Flow health gate: 46 read-only repo checks with fix recipes, a self-updating PR comment and SARIF."
 author: "Çağatay UNCU"
 branding:
   icon: "activity"
@@ -19,7 +19,7 @@ branding:
 
 inputs:
   checks:
-    description: "Comma-separated check ids to run (empty = all 42)"
+    description: "Comma-separated check ids to run (empty = all 46; see --list-checks)"
     required: false
     default: ""
   skip:
@@ -42,6 +42,10 @@ inputs:
     description: "Token for the PR comment and GitHub-side checks"
     required: false
     default: ${{ github.token }}
+  sarif-file:
+    description: "Also write a SARIF report here and upload it to code scanning (job needs permissions: security-events: write)"
+    required: false
+    default: ""
 
 outputs:
   exit-code:
@@ -61,15 +65,19 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
         set +e
-        args=(--format json --no-fetch)
-        [ -n "${{ inputs.checks }}" ] && args+=(--checks "${{ inputs.checks }}")
-        [ -n "${{ inputs.skip }}" ] && args+=(--skip "${{ inputs.skip }}")
-        args+=(--min-severity "${{ inputs.min-severity }}")
+        common=(--no-fetch --min-severity "${{ inputs.min-severity }}")
+        [ -n "${{ inputs.checks }}" ] && common+=(--checks "${{ inputs.checks }}")
+        [ -n "${{ inputs.skip }}" ] && common+=(--skip "${{ inputs.skip }}")
         report="$RUNNER_TEMP/gitdoctor-report.json"
-        bash "${{ github.action_path }}/scripts/gitflow-doctor.sh" "${args[@]}" >"$report"
+        bash "${{ github.action_path }}/scripts/gitflow-doctor.sh" --format json "${common[@]}" >"$report"
         echo "exit=$?" >>"$GITHUB_OUTPUT"
         echo "report=$report" >>"$GITHUB_OUTPUT"
         cat "$report"
+        # second, read-only pass for SARIF (a few seconds; repo state is immutable within the job)
+        if [ -n "${{ inputs.sarif-file }}" ]; then
+          bash "${{ github.action_path }}/scripts/gitflow-doctor.sh" --format sarif "${common[@]}" >"${{ inputs.sarif-file }}"
+          echo "sarif written to ${{ inputs.sarif-file }}"
+        fi
 
     - name: Comment findings on the PR
       if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
@@ -79,6 +87,13 @@ runs:
       run: |
         bash "${{ github.action_path }}/integrations/github-actions/comment.sh" \
           "${{ steps.run.outputs.report }}" "${{ github.event.pull_request.number }}"
+
+    - name: Upload SARIF to code scanning
+      if: ${{ inputs.sarif-file != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: gitdoctor
 
     - name: Gate
       shell: bash

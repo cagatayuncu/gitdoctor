@@ -7,7 +7,7 @@ command file:
    `.cursor/commands/` — or use the repo copy if this is the gitdoctor
    repo itself). Follow its command routing for the user's arguments
    (`init` | `start feature|release|hotfix` | `finish` | `doctor` | `sync` |
-   `status` | `cleanup`).
+   `status` | `cleanup` | `explain <check-id>` | `baseline`).
 2. The deterministic checker is `gitdoctor-skill/scripts/gitflow-doctor.sh` —
    run it with bash (Git Bash on Windows). You perform every mutation
    yourself, gated on its JSON output, exactly as SKILL.md prescribes.

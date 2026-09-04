@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/cagatayuncu/gitdoctor/main/schema/gitflow.schema.json",
   "version": 1,
   "versionFiles": [
     {

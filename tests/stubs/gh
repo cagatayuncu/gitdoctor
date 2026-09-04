@@ -35,6 +35,8 @@ case "$args" in
     say open-prs.txt ;;
   release\ view\ *)
     say release-view.txt ;;
+  release\ list\ *)
+    say release-list.txt ;;
   *)
     echo "gh-stub: unmatched invocation: gh $args" >&2
     exit 99 ;;

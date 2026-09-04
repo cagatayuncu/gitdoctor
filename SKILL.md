@@ -32,6 +32,8 @@ tags `vX.Y.Z` on main).
 | `gitdoctor sync` | Fetch + fast-forward main/develop (below) |
 | `gitdoctor status` | Status dashboard (below) |
 | `gitdoctor cleanup` | Stale-branch cleanup (below) |
+| `gitdoctor explain <check-id>` | `bash <skill-dir>/scripts/gitflow-doctor.sh --explain <check-id>` — print the recipe verbatim |
+| `gitdoctor baseline` | Adopt today's findings as ignore entries (below) |
 
 On `finish` with no arguments: read the current branch. `feature/*` →
 finish-feature; `release/*` → finish-release; `hotfix/*` → finish-hotfix;
@@ -50,8 +52,17 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --format json [flags]
   `--merge-mode`, `--ignore-branches`, `--ignore-tags`, `--ignore-shas`,
   `--ignore-findings`, `--allow-prerelease`, and one
   `--version-file <path> --version-pattern <ERE>` pair per configured version
-  file (pattern = POSIX ERE, capture group 1 is the version). Config schema:
-  references/config.md. No config file → pass nothing, defaults apply.
+  file (pattern = POSIX ERE, capture group 1 is the version), plus
+  `--changelog <changelog.file>` unless `changelog.enabled` is false (default:
+  enabled, `CHANGELOG.md`), `--no-github-release` when `release.githubRelease`
+  is false, `--require-signed-tags` when `release.signedTags` is true. Config
+  schema: references/config.md. No config file → pass nothing, defaults apply.
+- `--format json` is your contract. When the user wants to *see* the report,
+  run it again with `--format text` (terminal) or `--format markdown` (PR
+  descriptions, issues) and show that output verbatim instead of retyping
+  findings. `--format sarif` feeds code scanning; `--format baseline` feeds the
+  Baseline flow. `--list-checks` prints every id; `--explain <id>` a recipe.
+  Probes always emit JSON.
 - Exit codes: 0 clean/info, 1 warnings, 2 criticals, 4 usage error.
 - Findings carry `fix.commands` and `fix.recipeRef` into
   references/fix-recipes.md. Report each finding briefly; offer the recipe.
@@ -135,6 +146,24 @@ user confirmation, branch by branch or "all merged":
 - `method:"gh-pr"` or `"content-equivalent"` → same but `git branch -D <b>`
   (squash merges make `-d` refuse; the method IS the verification).
 - `branch-stale-inactive` → never delete without asking; offer finish/revive.
+
+## Baseline
+
+For adopting gitdoctor on a repo with historic noise: silence today's findings
+one by one, keep tomorrow's loud.
+
+1. Full doctor run with `--format baseline [config flags]` (include the current
+   `--ignore-findings` so existing entries are kept). Output:
+   `{"doctor":{"ignoreFindings":[...]}}` — one `id:key` per current finding
+   (key = the branch, tag, sha, file or PR it names); a finding without a key
+   contributes the bare id and silences that whole check.
+2. Show the user the NEW entries and what each one hides; drop the ones they
+   would rather fix. Never baseline `sync-diverged`, `tag-sha-mismatch`,
+   `operation-in-progress` or `wrong-base-hotfix` — those are stop signals.
+3. Write the merged list into `.gitflow.json` → `doctor.ignoreFindings`
+   (create the file with `"$schema"` per references/config.md if missing),
+   re-run the doctor to confirm the entries now report `skipped` /
+   `config-ignored`, and commit via the resolved merge mode.
 
 ## Safety rails (non-negotiable)
 
