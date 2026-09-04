@@ -538,6 +538,28 @@ content_absorbed_into() { # base_ref other_ref (generic; 2 spawns)
   [ "$tree" = "$base" ]
 }
 
+release_is_finished() { # release branch short name -> 0 when that version already shipped
+  local __rf_ver="" __rf_tag="" __rf_ref=""
+  case "$1" in "$RELEASE_PREFIX"*) __rf_ver=${1#"$RELEASE_PREFIX"} ;; *) return 1 ;; esac
+  __rf_tag="${TAG_PREFIX}${__rf_ver}"
+  tag_exists "$__rf_tag" || return 1
+  [ -n "$R_MAIN" ] || return 1
+  branch_ref_v __rf_ref "$1"
+  [ -n "$__rf_ref" ] || return 1
+  git merge-base --is-ancestor "$__rf_ref" "$R_MAIN" 2>/dev/null && return 0
+  content_absorbed_into "$R_MAIN" "$__rf_ref"
+}
+
+open_releases_v() { # varname newline-list -> entries that have NOT shipped yet
+  local __or_v=$1 __or_br __or_out=""
+  while IFS= read -r __or_br; do
+    [ -z "$__or_br" ] && continue
+    release_is_finished "$__or_br" && continue
+    __or_out="$__or_out${__or_out:+$NL}$__or_br"
+  done <<<"$2"
+  printf -v "$__or_v" '%s' "$__or_out"
+}
+
 conflicts_predicted() { # ref_a ref_b
   [ "$MERGETREE_OK" = 1 ] || return 1
   ! git merge-tree --write-tree --no-messages "$1" "$2" >/dev/null 2>&1
@@ -727,14 +749,17 @@ run_probe() {
     # back-merged
     local bm_target=$DEVELOP bm_note=""
     if [ "$PROBE" = finish-hotfix ]; then
-      local releases="" rcount=0
-      list_branches_v releases "${RELEASE_PREFIX}*"
+      local releases="" all_releases="" rcount=0
+      list_branches_v all_releases "${RELEASE_PREFIX}*"
+      open_releases_v releases "$all_releases"
       count_lines_v rcount "$releases"
       if [ "$rcount" -eq 1 ]; then
         bm_target=$releases; bm_note="open release takes the back-merge"
       elif [ "$rcount" -gt 1 ]; then
         add_step back-merged false "\"target\":\"ambiguous\",\"detail\":\"multiple open release branches — ask the user\""
         bm_target=""
+      elif [ -n "$all_releases" ]; then
+        bm_note="release branch(es) present but already shipped — $DEVELOP takes the back-merge"
       fi
     fi
     if [ -n "$bm_target" ]; then
@@ -1073,6 +1098,7 @@ else
   list_branches_v FEATURES "${FEATURE_PREFIX}*"
   list_branches_v RELEASES "${RELEASE_PREFIX}*"
   list_branches_v HOTFIXES "${HOTFIX_PREFIX}*"
+  OPEN_RELEASES=""; open_releases_v OPEN_RELEASES "$RELEASES" # shipped leftovers are not open
   BM_OPEN=0; [ "${BM_COUNT:-0}" -gt 0 ] 2>/dev/null && BM_OPEN=1
 
   if any_enabled wrong-base-feature; then
@@ -1122,10 +1148,10 @@ else
   # release branch family
   if any_enabled multiple-release-branches; then
     rel_count=0
-    count_lines_v rel_count "$RELEASES"
+    count_lines_v rel_count "$OPEN_RELEASES"
     if [ "$rel_count" -gt "$MAX_RELEASES" ]; then
       # shellcheck disable=SC2086
-      json_arr_v REL_ARR $RELEASES
+      json_arr_v REL_ARR $OPEN_RELEASES
       json_arr_v FIX "finish or delete the older release before starting another"
       fail_check multiple-release-branches warning "$rel_count release branches open (max $MAX_RELEASES)" \
         "\"branches\":$REL_ARR" "$FIX" multiple-release-branches
@@ -1152,7 +1178,7 @@ else
           "\"branch\":\"$J\",\"developAhead\":$behind,\"pendingBackMerge\":${pending:-0},\"conflictsPredicted\":$cp" \
           "$FIX" release-develop-drift
       fi
-    done <<<"$RELEASES"
+    done <<<"$OPEN_RELEASES"
     [ "$drift_found" = 0 ] && ok_check release-develop-drift
   fi
 
@@ -1171,7 +1197,11 @@ else
       if tag_exists "$tag"; then
         orph_found=1
         json_str_v J "$br"; json_str_v JT "$tag"
-        json_arr_v FIX "resume: gitdoctor finish (probe walk completes back-merge/deletion)" "or after verifying merge: git push origin --delete $br"
+        if remote_branch_exists "$br"; then
+          json_arr_v FIX "resume: gitdoctor finish (probe walk completes back-merge/deletion)" "or after verifying merge: git push origin --delete $br && git branch -d $br"
+        else
+          json_arr_v FIX "resume: gitdoctor finish (probe walk completes back-merge/deletion)" "or after verifying merge (local-only leftover): git branch -d $br"
+        fi
         fail_check "orphaned-$kind-branch" warning "$br still exists but $tag is already tagged — an unfinished finish" \
           "\"branch\":\"$J\",\"tag\":\"$JT\"" "$FIX" orphaned-release-branch
         continue

@@ -160,6 +160,15 @@ completes back-merge/deletion. If everything else is verified done:
 ```bash
 git push origin --delete <branch> && git branch -d <branch>
 ```
+A leftover that exists **only locally** (no counterpart on origin) is the
+common case after someone else finished the release — the doctor's fix hint
+drops the push leg for it:
+```bash
+git branch -d <branch>
+```
+`-d` refuses if the branch still holds unmerged commits; if it refuses while
+`git rev-list --count main..<branch>` is 0, those commits reached main but not
+develop — that is a missing back-merge, investigate before forcing `-D`.
 
 ## release-version-collision
 The release branch targets a version ≤ the latest tag. Rename:
