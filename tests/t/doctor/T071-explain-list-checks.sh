@@ -7,8 +7,8 @@ cd "$TESTTMP" # not a git repo
 
 bash "$DOCTOR" --list-checks >"$TESTTMP/ids.txt" || fail "--list-checks must exit 0"
 n=$(grep -c . "$TESTTMP/ids.txt")
-[ "$n" -eq 46 ] || fail "expected 46 check ids, got $n"
-for id in missing-back-merge changelog-tag-mismatch tag-unsigned gh-protection-missing-develop gh-release-missing-for-tag back-merge-content-only orphaned-hotfix-branch; do
+[ "$n" -eq 47 ] || fail "expected 47 check ids, got $n"
+for id in missing-back-merge changelog-tag-mismatch tag-unsigned gh-protection-missing-develop gh-release-missing-for-tag homebrew-formula-stale back-merge-content-only orphaned-hotfix-branch; do
   grep -qx "$id" "$TESTTMP/ids.txt" || fail "id $id missing from --list-checks"
 done
 # every id has a recipe section, either its own or a shared one

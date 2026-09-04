@@ -39,6 +39,8 @@ LIST_CHECKS=0
 CHANGELOG_FILE=""
 GITHUB_RELEASE=1
 REQUIRE_SIGNED_TAGS=0
+HOMEBREW_TAP=""
+HOMEBREW_FORMULA=""
 OFFLINE=0
 DO_FETCH=1
 NOW=""
@@ -95,6 +97,9 @@ usage: gitflow-doctor.sh [options]
   --changelog PATH           changelog file (enables changelog-tag-mismatch)
   --no-github-release        repo does not publish GitHub Releases (skips gh-release-missing-for-tag)
   --require-signed-tags      release tags must be GPG/SSH signed (enables tag-unsigned)
+  --homebrew-tap owner/repo --homebrew-formula PATH
+                             Homebrew tap that ships this repo (enables the
+                             homebrew-formula-stale check and the finish probe step)
   --assume-github owner/repo force GitHub mode even for non-github origin (tests)
   --probe finish-release|finish-hotfix|finish-feature --branch B [--version V]
 EOF
@@ -112,6 +117,8 @@ while [ $# -gt 0 ]; do
     --changelog) CHANGELOG_FILE=${2:?}; shift 2 ;;
     --no-github-release) GITHUB_RELEASE=0; shift ;;
     --require-signed-tags) REQUIRE_SIGNED_TAGS=1; shift ;;
+    --homebrew-tap) HOMEBREW_TAP=${2:?}; shift 2 ;;
+    --homebrew-formula) HOMEBREW_FORMULA=${2:?}; shift 2 ;;
     --offline) OFFLINE=1; shift ;;
     --no-fetch) DO_FETCH=0; shift ;;
     --now) NOW=${2:?}; shift 2 ;;
@@ -150,7 +157,7 @@ case "$FORMAT" in json|jsonl|text|markdown|sarif|baseline) : ;; *) die_usage "--
 # ---------------------------------------------------------------------------
 # Check catalog (the authoritative id list; README/action counts derive from it)
 # ---------------------------------------------------------------------------
-ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift multiple-release-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag"
+ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift multiple-release-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale"
 RECIPES_URL="https://github.com/cagatayuncu/gitdoctor/blob/main/references/fix-recipes.md"
 
 known_check_id() { case " $ALL_CHECK_IDS " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -526,7 +533,7 @@ SHALLOW=0; [ "$_shallow" = true ] && SHALLOW=1
 # zero-spawn scan of the scalar keys the doctor understands; the agent passes
 # everything as flags, which always win. Several keys may share one line.
 CONFIG_FILE="$REPO_ROOT/.gitflow.json"
-CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
+CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
 if [ -f "$CONFIG_FILE" ]; then
   CFG_CL_BLOCK=0; CFG_CL_FILE=""; CFG_CL_ENABLED=true
   while IFS= read -r line || [ -n "$line" ]; do
@@ -546,6 +553,8 @@ if [ -f "$CONFIG_FILE" ]; then
         enabled) CFG_CL_ENABLED=$val ;;
         githubRelease) [ "$val" = false ] && GITHUB_RELEASE=0 ;;
         signedTags) [ "$val" = true ] && REQUIRE_SIGNED_TAGS=1 ;;
+        tap) [ -z "$HOMEBREW_TAP" ] && HOMEBREW_TAP=$val ;;
+        formula) [ -z "$HOMEBREW_FORMULA" ] && HOMEBREW_FORMULA=$val ;;
       esac
     done
   done <"$CONFIG_FILE"
@@ -832,6 +841,22 @@ resolve_mode_v() { # varname protected-value
 resolve_mode_v RESOLVED_MAIN_MODE "$PROT_MAIN"
 resolve_mode_v RESOLVED_DEV_MODE "$PROT_DEV"
 
+homebrew_configured() { [ -n "$HOMEBREW_TAP" ] && [ -n "$HOMEBREW_FORMULA" ]; }
+tap_formula_v() { # varname -> raw formula from the tap's default branch ("" on failure); one gh call
+  capture_all "$1" gh api -H "Accept: application/vnd.github.raw" "repos/$HOMEBREW_TAP/contents/$HOMEBREW_FORMULA"
+}
+formula_has_tag() { # formula-content tag -> the url line points at that tag's tarball
+  case "$1" in *"/tags/$2.tar.gz"*) return 0 ;; esac
+  return 1
+}
+formula_tag_v() { # varname formula-content -> the tag the url currently ships ("" if none)
+  local __ft=$2
+  case "$__ft" in
+    *"/tags/"*".tar.gz"*) __ft=${__ft##*/tags/}; printf -v "$1" '%s' "${__ft%%.tar.gz*}" ;;
+    *) clear_v "$1" ;;
+  esac
+}
+
 # ===========================================================================
 # PROBE MODE
 # ===========================================================================
@@ -1029,6 +1054,26 @@ run_probe() {
       if [ -n "$rel" ]; then add_step gh-release true; else add_step gh-release false; fi
     else
       add_step gh-release false "\"detail\":\"gh unavailable ($GH_STATE)\""
+    fi
+  fi
+
+  # homebrew-formula (only when a tap is configured): the formula url must ship this tag
+  if [ "$PROBE" != finish-feature ] && homebrew_configured; then
+    json_str_v jt "$HOMEBREW_TAP/$HOMEBREW_FORMULA"
+    if [ "$GH_MODE" = 1 ]; then
+      local formula="" shipped=""
+      tap_formula_v formula
+      if [ -z "$formula" ]; then
+        add_step homebrew-formula false "\"formula\":\"$jt\",\"detail\":\"could not read the formula from the tap\""
+      elif formula_has_tag "$formula" "$tag"; then
+        add_step homebrew-formula true "\"formula\":\"$jt\""
+      else
+        formula_tag_v shipped "$formula"
+        json_str_v jb "$shipped"
+        add_step homebrew-formula false "\"formula\":\"$jt\",\"shipped\":\"$jb\",\"detail\":\"formula url does not point at $tag yet\""
+      fi
+    else
+      add_step homebrew-formula false "\"formula\":\"$jt\",\"detail\":\"gh unavailable ($GH_STATE)\""
     fi
   fi
 
@@ -1857,6 +1902,33 @@ if [ "$GH_MODE" = 1 ]; then
   fi
 else
   for id in $GH_IDS; do skip_check "$id" "$GH_STATE"; done
+fi
+
+# --- A.8 distribution: Homebrew tap formula vs latest tag ------------------------
+if any_enabled homebrew-formula-stale; then
+  if ! homebrew_configured; then
+    skip_check homebrew-formula-stale not-configured
+  elif [ "$GH_MODE" != 1 ]; then
+    skip_check homebrew-formula-stale "$GH_STATE"
+  elif [ -z "$LATEST_TAG" ]; then
+    skip_check homebrew-formula-stale no-semver-tags
+  else
+    HB_FORMULA=""
+    tap_formula_v HB_FORMULA
+    if [ -z "$HB_FORMULA" ]; then
+      skip_check homebrew-formula-stale api-error
+    elif formula_has_tag "$HB_FORMULA" "$LATEST_TAG"; then
+      ok_check homebrew-formula-stale
+    else
+      hb_cur=""
+      formula_tag_v hb_cur "$HB_FORMULA"
+      json_str_v J "$HOMEBREW_TAP/$HOMEBREW_FORMULA"; json_str_v JT "$LATEST_TAG"; json_str_v JC "$hb_cur"
+      json_arr_v FIX "resume: gitdoctor finish (homebrew-formula step) — or by hand per references/fix-recipes.md#homebrew-formula-stale" \
+        "curl -sL https://github.com/$SLUG/archive/refs/tags/$LATEST_TAG.tar.gz | sha256sum"
+      fail_check homebrew-formula-stale warning "Homebrew formula $HOMEBREW_FORMULA in $HOMEBREW_TAP ships ${hb_cur:-an unknown version} but the latest tag is $LATEST_TAG" \
+        "\"formula\":\"$J\",\"formulaTag\":\"$JC\",\"latestTag\":\"$JT\"" "$FIX" homebrew-formula-stale high "$LATEST_TAG"
+    fi
+  fi
 fi
 
 finish_exit

@@ -13,10 +13,14 @@
 - Findings carry a `key` (the branch, tag, sha, file or PR they are about) and
   `doctor.ignoreFindings` accepts `check-id:key`, so one branch or tag can be
   silenced instead of a whole check; `gitdoctor baseline` flow in SKILL.md
-- Four new checks (46 total): `changelog-tag-mismatch` (latest tag has no
+- Five new checks (47 total): `changelog-tag-mismatch` (latest tag has no
   changelog heading on main), `tag-unsigned` (opt-in via
   `release.signedTags`), `gh-protection-missing-develop`,
-  `gh-release-missing-for-tag`
+  `gh-release-missing-for-tag`, `homebrew-formula-stale`
+- Homebrew distribution folded into the flow: `homebrew.tap`/`homebrew.formula`
+  in `.gitflow.json`, a `homebrew-formula` step in the release/hotfix finish
+  probe, and a playbook that bumps url + sha256 in the tap with one `gh api`
+  call (no clone)
 - `.gitflow.json` JSON Schema (`schema/gitflow.schema.json`) for editor
   completion; `$schema` documented in the config reference
 - pre-commit framework support (`.pre-commit-hooks.yaml` → `gitdoctor-preflight`
@@ -34,7 +38,7 @@
   aborted the doctor; caught by the new macOS CI leg
 
 ### Tests
-- Suite grown to 57 scenarios; CI matrix adds macOS (bash 3.2)
+- Suite grown to 59 scenarios; CI matrix adds macOS (bash 3.2)
 
 ## 0.2.1 (2026-08-30)
 
