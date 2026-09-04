@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/cagatayuncu/gitdoctor/main/schema/gitflow.schema.json",
+  "title": "gitdoctor .gitflow.json",
+  "description": "Repository configuration for gitdoctor (Git Flow operations + read-only doctor). Every key is optional; a missing file equals all defaults.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "type": "integer", "const": 1, "description": "Config schema version." },
+    "branches": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "main": { "type": "string", "default": "main", "description": "Production branch. Unset: 'master' if it exists, else 'main'." },
+        "develop": { "type": "string", "default": "develop" },
+        "mainAliases": { "type": "array", "items": { "type": "string" }, "default": ["main", "master"], "description": "Agent-side: candidates tried when branches.main is unset." }
+      }
+    },
+    "prefixes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "feature": { "type": "string", "default": "feature/" },
+        "release": { "type": "string", "default": "release/" },
+        "hotfix": { "type": "string", "default": "hotfix/" },
+        "backmerge": { "type": "string", "default": "backmerge/" }
+      }
+    },
+    "tagPrefix": { "type": "string", "default": "v", "description": "Tag prefix; empty string allowed." },
+    "mergeMode": { "type": "string", "enum": ["auto", "pr", "local"], "default": "auto", "description": "auto = PR toward protected branches, local merge otherwise (resolved per target branch)." },
+    "pr": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mergeMethod": { "type": "string", "enum": ["auto", "merge", "squash", "rebase"], "default": "auto" },
+        "draft": { "type": "boolean", "default": false },
+        "autoMergeOnCIWait": { "type": "boolean", "default": false },
+        "ciTimeoutMinutes": { "type": "integer", "minimum": 1, "default": 30 }
+      }
+    },
+    "versionFiles": {
+      "type": "array",
+      "description": "Files whose version must match the release tag. Each entry has a path plus either a preset or a raw pattern/replace pair.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "description": "Repo-relative path." },
+          "preset": { "type": "string", "enum": ["package-json", "csproj", "pyproject", "cargo-toml", "plain"], "description": "Named pattern from references/version-files.md." },
+          "pattern": { "type": "string", "description": "POSIX ERE matched per line; capture group 1 is the version." },
+          "replace": { "type": "string", "description": "Replacement line with a {version} placeholder." }
+        },
+        "oneOf": [
+          { "required": ["preset"] },
+          { "required": ["pattern", "replace"] }
+        ]
+      }
+    },
+    "changelog": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "file": { "type": "string", "default": "CHANGELOG.md" },
+        "convention": { "type": "string", "enum": ["conventional-commits", "keep-a-changelog", "none"], "default": "conventional-commits" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxConcurrent": { "type": "integer", "minimum": 1, "default": 1, "description": "Open release branches allowed at once (doctor: multiple-release-branches)." },
+        "allowPrerelease": { "type": "boolean", "default": false, "description": "Accept x.y.z-suffix release/hotfix branch names." },
+        "githubRelease": { "type": "boolean", "default": true, "description": "Create a GitHub Release per tag; false also disables the gh-release-missing-for-tag check." },
+        "signedTags": { "type": "boolean", "default": false, "description": "Require GPG/SSH-signed release tags (enables the tag-unsigned check)." }
+      }
+    },
+    "backmerge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": { "type": "string", "enum": ["merge-tag", "merge-branch"], "default": "merge-tag" },
+        "conflictPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "versionFiles": { "type": "string", "enum": ["higher", "manual"], "default": "higher" },
+            "changelog": { "type": "string", "enum": ["union", "manual"], "default": "union" }
+          }
+        }
+      }
+    },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultBranch": { "type": "string", "default": "develop", "description": "Expected GitHub default branch (doctor: gh-default-branch-unexpected)." }
+      }
+    },
+    "doctor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "staleDays": { "type": "integer", "minimum": 1, "default": 30 },
+        "fetch": { "type": "boolean", "default": true, "description": "false passes --no-fetch." },
+        "scanDepth": { "type": "integer", "minimum": 1, "default": 200 },
+        "ignoreBranches": { "type": "array", "items": { "type": "string" }, "default": ["dependabot/*", "renovate/*", "gh-pages"], "description": "Shell globs." },
+        "ignoreTags": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "ignoreShas": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "ignoreFindings": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(:.+)?$" },
+          "default": [],
+          "description": "Entries 'check-id' (whole check) or 'check-id:key' where key is the sha, branch, tag, file or PR number the finding names. `gitdoctor baseline` generates them."
+        }
+      }
+    }
+  }
+}

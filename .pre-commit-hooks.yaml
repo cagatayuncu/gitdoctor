@@ -1,0 +1,22 @@
+# pre-commit framework integration (https://pre-commit.com).
+# Add to your repo's .pre-commit-config.yaml:
+#
+#   repos:
+#     - repo: https://github.com/cagatayuncu/gitdoctor
+#       rev: v0.3.0
+#       hooks:
+#         - id: gitdoctor-preflight
+#
+# then `pre-commit install --hook-type pre-push`. The hook runs the doctor's
+# preflight safety set before every push and blocks on critical findings
+# (bypass once with GITDOCTOR_SKIP=1 git push). The doctor script ships in this
+# same checkout, so nothing else needs to be installed.
+- id: gitdoctor-preflight
+  name: gitdoctor preflight (Git Flow safety gate)
+  description: Blocks pushes on critical Git Flow findings (diverged branches, tag sha mismatch, wrong-base hotfix, ...).
+  entry: integrations/hooks/pre-push
+  language: script
+  stages: [pre-push]
+  pass_filenames: false
+  always_run: true
+  verbose: true
