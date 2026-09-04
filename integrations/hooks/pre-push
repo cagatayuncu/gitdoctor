@@ -7,8 +7,10 @@
 #
 # Locating the doctor, first match wins:
 #   1. $GITDOCTOR_PATH (full path to gitflow-doctor.sh)
-#   2. ~/.claude/skills/gitdoctor/scripts/gitflow-doctor.sh (skill install)
-#   3. gitflow-doctor.sh on PATH
+#   2. ../../scripts/gitflow-doctor.sh next to this file (a gitdoctor checkout —
+#      this is how the pre-commit framework runs it, see .pre-commit-hooks.yaml)
+#   3. ~/.claude/skills/gitdoctor/scripts/gitflow-doctor.sh (skill install)
+#   4. gitflow-doctor.sh on PATH
 #
 # Escape hatch for a deliberate exception: GITDOCTOR_SKIP=1 git push ...
 # Note: this scans the REPO state, not just the pushed ref — an unrelated
@@ -18,8 +20,11 @@ set -u
 [ -n "${GITDOCTOR_SKIP:-}" ] && exit 0
 
 DOCTOR=""
+HOOK_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 if [ -n "${GITDOCTOR_PATH:-}" ] && [ -f "$GITDOCTOR_PATH" ]; then
   DOCTOR=$GITDOCTOR_PATH
+elif [ -n "$HOOK_DIR" ] && [ -f "$HOOK_DIR/../../scripts/gitflow-doctor.sh" ]; then
+  DOCTOR="$HOOK_DIR/../../scripts/gitflow-doctor.sh"
 elif [ -f "$HOME/.claude/skills/gitdoctor/scripts/gitflow-doctor.sh" ]; then
   DOCTOR="$HOME/.claude/skills/gitdoctor/scripts/gitflow-doctor.sh"
 elif command -v gitflow-doctor.sh >/dev/null 2>&1; then

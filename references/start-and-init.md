@@ -12,9 +12,11 @@ Prepares a repo for git flow. Idempotent — re-running fixes what is missing.
    git switch -c develop && git push -u origin develop
    ```
    (If only `master` exists, use it as main and record it in config.)
-3. Write `.gitflow.json` (references/config.md): detect version files —
-   `package.json`, `*.csproj` with `<Version>`, `pyproject.toml`, `Cargo.toml`,
-   `VERSION` — and write explicit `versionFiles` entries with presets.
+3. Write `.gitflow.json` (references/config.md) starting with
+   `"$schema": "https://raw.githubusercontent.com/cagatayuncu/gitdoctor/main/schema/gitflow.schema.json"`
+   (editor completion): detect version files — `package.json`, `*.csproj` with
+   `<Version>`, `pyproject.toml`, `Cargo.toml`, `VERSION` — and write explicit
+   `versionFiles` entries with presets.
 4. Append to `.gitattributes` (create if missing): `CHANGELOG.md merge=union`
    (use the configured changelog filename).
 5. If no semver tag exists, offer an initial `v0.1.0` (or user's choice) on
