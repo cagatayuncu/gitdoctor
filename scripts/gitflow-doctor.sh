@@ -185,6 +185,7 @@ if [ -n "$EXPLAIN" ]; then
   [ "$script_dir" = "${BASH_SOURCE[0]}" ] && script_dir=.
   recipes_file="$script_dir/../references/fix-recipes.md"
   if [ ! -f "$recipes_file" ]; then
+    # shellcheck disable=SC2154 # anchor is assigned via printf -v inside recipe_anchor_v
     printf 'recipe file not found next to this script (%s)\nread it online: %s#%s\n' "$recipes_file" "$RECIPES_URL" "$anchor"
     exit 0
   fi
@@ -235,6 +236,12 @@ capture_all() { # varname cmd...  (all output lines, newline-joined, no trailing
     __acc="$__acc${__acc:+$NL}$__line"
   done < <("$@" 2>/dev/null)
   printf -v "$__v" '%s' "$__acc"
+}
+
+clear_v() { # varname — assign the empty string. NOT `printf -v v ''`: bash 3.2 (macOS)
+  # leaves the variable unset when the formatted result is empty, and `set -u`
+  # then aborts on the first read. `read` at EOF assigns "" on every bash.
+  IFS= read -r "$1" </dev/null || :
 }
 
 json_str_v() { # varname value — JSON-escape into varname
@@ -352,7 +359,7 @@ skip_check() { # id reason [title] [key]
 json_arr_unpack_v() { # varname json-array-of-strings -> newline list (inverse of json_arr_v)
   local __ju_v=$1 __ju_s=$2 __ju_out="" __ju_item
   __ju_s=${__ju_s#[}; __ju_s=${__ju_s%]}
-  if [ -z "$__ju_s" ]; then printf -v "$__ju_v" ''; return; fi
+  if [ -z "$__ju_s" ]; then clear_v "$__ju_v"; return; fi
   __ju_s=${__ju_s#\"}; __ju_s=${__ju_s%\"}
   while :; do
     case "$__ju_s" in
@@ -401,6 +408,7 @@ render_markdown() {
   if [ "$N_CRIT" -gt 0 ]; then printf '## :red_circle: gitdoctor: %s critical finding(s)\n\n' "$N_CRIT"
   elif [ "$N_WARN" -gt 0 ]; then printf '## :yellow_circle: gitdoctor: %s warning(s)\n\n' "$N_WARN"
   else printf '## :green_circle: gitdoctor: clean\n\n'; fi
+  # shellcheck disable=SC2016 # literal markdown backticks
   printf '`%s critical · %s warning · %s info · %s ok · %s skipped`\n\n' "$N_CRIT" "$N_WARN" "$N_INFO" "$N_OK" "$N_SKIP"
   if [ $((N_CRIT + N_WARN + N_INFO)) -gt 0 ]; then
     printf '| | Check | Finding |\n|---|---|---|\n'
@@ -408,12 +416,14 @@ render_markdown() {
       [ "$kind" = fail ] || continue
       case "$sev" in critical) icon=':red_circle:' ;; warning) icon=':yellow_circle:' ;; *) icon=':large_blue_circle:' ;; esac
       title=${title//|/\\|}
+      # shellcheck disable=SC2016 # literal markdown backticks
       printf '| %s | `%s` | %s |\n' "$icon" "$id" "$title"
     done <<<"$REC_LINES"
     printf '\n<details><summary>Fix commands</summary>\n\n'
     while IFS="$US" read -r kind id sev title conf recipe key fix; do
       [ "$kind" = fail ] || continue
       json_arr_unpack_v cmds "$fix"
+      # shellcheck disable=SC2016 # literal markdown code fence
       printf '**%s** ([recipe](%s#%s))\n```bash\n%s\n```\n\n' "$id" "$RECIPES_URL" "$recipe" "$cmds"
     done <<<"$REC_LINES"
     printf '</details>\n'
@@ -441,6 +451,7 @@ render_sarif() {
     jr="$jr,\"partialFingerprints\":{\"gitdoctorKey\":\"$id:${jk:--}\"},\"properties\":{\"confidence\":\"$jc\",\"key\":\"$jk\"}}"
     results="$results${results:+,}$jr"
   done <<<"$REC_LINES"
+  # shellcheck disable=SC2016 # "$schema" is a literal SARIF key
   printf '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitdoctor","version":"%s","informationUri":"https://github.com/cagatayuncu/gitdoctor","rules":[%s]}},"invocations":[{"executionSuccessful":true}],"results":[%s]}]}\n' \
     "$DOCTOR_VERSION" "$rules" "$results"
 }
@@ -636,7 +647,7 @@ lookup_line() { # varname haystack key  -> line starting "key "
   # NOTE: internal names are __ll_-prefixed: bash locals are dynamically
   # scoped, so an unprefixed local would shadow the caller's target varname.
   local __ll_v=$1 __ll_line
-  printf -v "$__ll_v" ''
+  clear_v "$__ll_v"
   while IFS= read -r __ll_line; do
     case "$__ll_line" in "$3 "*) printf -v "$__ll_v" '%s' "$__ll_line"; return 0 ;; esac
   done <<<"$2"
@@ -652,7 +663,7 @@ tag_commit_v() { # varname tagname
     L=${L#* }
     printf -v "$1" '%s' "${L%% *}"
   else
-    printf -v "$1" ''
+    clear_v "$1"
   fi
 }
 sha_is_tagged() { case "$TAGGED_SHAS" in *" $1 "*) return 0 ;; esac; return 1; }
@@ -660,12 +671,12 @@ sha_is_tagged() { case "$TAGGED_SHAS" in *" $1 "*) return 0 ;; esac; return 1; }
 branch_ref_v() { # varname shortname -> refs/remotes/origin/N or refs/heads/N or ""
   if remote_branch_exists "$2"; then printf -v "$1" 'refs/remotes/origin/%s' "$2"
   elif local_branch_exists "$2"; then printf -v "$1" 'refs/heads/%s' "$2"
-  else printf -v "$1" ''; fi
+  else clear_v "$1"; fi
 }
 
 list_branches_v() { # varname glob -> newline list of unique short names (local+remote)
   local __v=$1 pat=$2 line name out="" seen=" "
-  printf -v "$__v" ''
+  clear_v "$__v"
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     name=${line%% *}
@@ -780,7 +791,7 @@ conflicts_predicted() { # ref_a ref_b
 
 extract_version_v() { # varname ref path pattern — ERE with capture group 1, one process
   local __v=$1 ref=$2 path=$3 pat=$4 content="" line
-  printf -v "$__v" ''
+  clear_v "$__v"
   capture_all content git show "$ref:$path"
   while IFS= read -r line; do
     if [[ $line =~ $pat ]]; then
@@ -793,12 +804,12 @@ extract_version_v() { # varname ref path pattern — ERE with capture group 1, o
 
 vf_path_v() { # varname index(0-based)
   local i=0 line
-  printf -v "$1" ''
+  clear_v "$1"
   while IFS= read -r line; do [ "$i" = "$2" ] && { printf -v "$1" '%s' "$line"; return; }; i=$((i + 1)); done <<<"$VF_PATHS"
 }
 vf_pattern_v() {
   local i=0 line
-  printf -v "$1" ''
+  clear_v "$1"
   while IFS= read -r line; do [ "$i" = "$2" ] && { printf -v "$1" '%s' "$line"; return; }; i=$((i + 1)); done <<<"$VF_PATTERNS"
 }
 
