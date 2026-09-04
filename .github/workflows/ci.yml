@@ -8,11 +8,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Run test suite (Git Bash on Windows enforces portability)
+      - name: Run test suite (macOS bash 3.2 and Windows Git Bash enforce portability)
         shell: bash
         run: bash tests/run-tests.sh
 

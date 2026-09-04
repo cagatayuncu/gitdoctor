@@ -1,6 +1,6 @@
 {
   "name": "gitdoctor",
-  "description": "One-command Git Flow for AI coding agents: a 42-check read-only repo doctor with fix recipes, resumable release/hotfix finishes, protection-aware PR/local merges, and a PR-commenting GitHub Action.",
+  "description": "One-command Git Flow for AI coding agents: a 47-check read-only repo doctor with fix recipes, resumable release/hotfix finishes, protection-aware PR/local merges, and a PR-commenting GitHub Action.",
   "author": {
     "name": "Çağatay UNCU",
     "url": "https://github.com/cagatayuncu"

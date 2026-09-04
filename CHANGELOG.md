@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.3.0 (2026-09-04)
+
+### Features
+- Doctor output formats for people and pipelines: `--format text` (terminal),
+  `--format markdown` (PR descriptions, issues), `--format sarif` (GitHub code
+  scanning, with an action input `sarif-file` that uploads it) and
+  `--format baseline` (ready-to-paste `doctor.ignoreFindings` entries)
+- `--explain <check-id>` prints the fix recipe in the terminal;
+  `--list-checks` prints the catalog; typos in `--checks`/`--skip` are usage
+  errors instead of silently running nothing
+- Findings carry a `key` (the branch, tag, sha, file or PR they are about) and
+  `doctor.ignoreFindings` accepts `check-id:key`, so one branch or tag can be
+  silenced instead of a whole check; `gitdoctor baseline` flow in SKILL.md
+- Five new checks (47 total): `changelog-tag-mismatch` (latest tag has no
+  changelog heading on main), `tag-unsigned` (opt-in via
+  `release.signedTags`), `gh-protection-missing-develop`,
+  `gh-release-missing-for-tag`, `homebrew-formula-stale`
+- Homebrew distribution folded into the flow: `homebrew.tap`/`homebrew.formula`
+  in `.gitflow.json`, a `homebrew-formula` step in the release/hotfix finish
+  probe, and a playbook that bumps url + sha256 in the tap with one `gh api`
+  call (no clone)
+- `.gitflow.json` JSON Schema (`schema/gitflow.schema.json`) for editor
+  completion; `$schema` documented in the config reference
+- pre-commit framework support (`.pre-commit-hooks.yaml` → `gitdoctor-preflight`
+  pre-push hook); the hook finds the doctor next to itself in a gitdoctor checkout
+- Standalone runs read `changelog`, `release.githubRelease` and
+  `release.signedTags` from `.gitflow.json` (sed fallback), so hooks and the
+  action honour them without the agent
+
+### Fixes
+- Shipped-but-undeleted `release/*` branches no longer count as open releases
+  (hotfix back-merge routing, `multiple-release-branches`,
+  `release-develop-drift`); `orphaned-release-branch` gives a local-only
+  cleanup hint when origin already dropped the branch
+- bash 3.2 (macOS): empty `printf -v` left variables unset and `set -u`
+  aborted the doctor; caught by the new macOS CI leg
+
+### Tests
+- Suite grown to 59 scenarios; CI matrix adds macOS (bash 3.2)
+
 ## 0.2.1 (2026-08-30)
 
 ### Fixes

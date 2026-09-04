@@ -26,4 +26,4 @@ jobs:
       - name: Fetch all branches and tags
         run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
 
-      - uses: cagatayuncu/gitdoctor@v0.2.1
+      - uses: cagatayuncu/gitdoctor@v0.3.0

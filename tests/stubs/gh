@@ -15,6 +15,8 @@ say() { cat "${GH_STUB_DIR:?}/$1" 2>/dev/null || true; }
 case "$args" in
   "auth status")
     exit 0 ;;
+  api\ -H\ Accept:\ application/vnd.github.raw\ repos/*/contents/*)
+    say tap-formula.txt ;;
   api\ repos/*/branches/*\ --jq\ .protected)
     case "$args" in
       */branches/main\ --jq\ .protected) say protection-main.txt ;;
@@ -35,6 +37,8 @@ case "$args" in
     say open-prs.txt ;;
   release\ view\ *)
     say release-view.txt ;;
+  release\ list\ *)
+    say release-list.txt ;;
   *)
     echo "gh-stub: unmatched invocation: gh $args" >&2
     exit 99 ;;

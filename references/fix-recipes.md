@@ -160,6 +160,15 @@ completes back-merge/deletion. If everything else is verified done:
 ```bash
 git push origin --delete <branch> && git branch -d <branch>
 ```
+A leftover that exists **only locally** (no counterpart on origin) is the
+common case after someone else finished the release — the doctor's fix hint
+drops the push leg for it:
+```bash
+git branch -d <branch>
+```
+`-d` refuses if the branch still holds unmerged commits; if it refuses while
+`git rev-list --count main..<branch>` is 0, those commits reached main but not
+develop — that is a missing back-merge, investigate before forcing `-D`.
 
 ## release-version-collision
 The release branch targets a version ≤ the latest tag. Rename:
@@ -173,6 +182,20 @@ git push -u origin release/NEW
 The version file on main disagrees with the latest tag. Normal cause: a finish
 that skipped the bump step. Align on the next finish, or hot-patch now via a
 hotfix branch that only bumps the file.
+
+## changelog-tag-mismatch
+The latest release tag has no heading in the changelog on main (or the file is
+missing there). Only enabled when `changelog.enabled` is true — the agent
+passes `--changelog <file>`. Headings match `## 1.2.0`, `## [1.2.0] - date`
+and `## v1.2.0`; a version mentioned only in body text does not count.
+Normally the release/hotfix finish writes the section before tagging; repair
+after the fact via a changelog-only hotfix branch:
+```bash
+git switch -c hotfix/X.Y.Z+1 main   # or fold it into the next hotfix
+# add "## X.Y.Z (date)" with the release notes to CHANGELOG.md
+gitdoctor finish
+```
+Set `changelog.enabled: false` in `.gitflow.json` if the repo keeps no changelog.
 
 ## tag-not-on-main
 A semver tag points at a commit not reachable from main — usually a finish
@@ -199,6 +222,18 @@ Lightweight release tags carry no author/date/message. Future tags: always
 tag is recent and the team is warned (`git tag -d`, retag annotated,
 `git push -f origin <tag>` — the one sanctioned tag force-push, explicit
 user confirmation required).
+
+## tag-unsigned
+Only when `release.signedTags` is true (`--require-signed-tags`): a semver tag
+is lightweight or an annotated tag object without a GPG/SSH signature block.
+Sign future tags automatically and verify existing ones:
+```bash
+git config tag.gpgSign true          # every `git tag -a` becomes `git tag -s`
+git tag -v vX.Y.Z                    # check the signature of an existing tag
+```
+Re-signing a published tag means replacing it (`git tag -s -f` + force-push
+of that single tag) — coordinate with everyone who fetched it, and prefer
+leaving historic unsigned tags alone via `doctor.ignoreTags`.
 
 ## tag-unpushed
 `git push origin <tag>` — an unpushed release tag means CI/teammates cannot
@@ -240,6 +275,16 @@ gh api -X PUT "repos/<owner>/<repo>/branches/main/protection" \
 ```
 With protection on, finishes toward main automatically use PR mode.
 
+## gh-protection-missing-develop
+Same recipe as main, for the integration branch:
+```bash
+gh api -X PUT "repos/<owner>/<repo>/branches/develop/protection"   -F required_pull_request_reviews.required_approving_review_count=1   -F enforce_admins=false -F required_status_checks=null -F restrictions=null
+```
+Keep **merge commits allowed** in the repo settings: back-merges from main
+into a protected, squash-only develop lose ancestry (see
+`gh-squash-only-back-merge-limitation`). With protection on, finishes toward
+develop automatically use PR mode.
+
 ## gh-default-branch-unexpected
 `gh repo edit --default-branch develop` — so new PRs target develop by
 default. Skip if the team intentionally prefers main (set
@@ -255,3 +300,30 @@ permanently downgrades back-merge checking to content-equivalence. Either
 allow merge commits (`gh repo edit --enable-merge-commit`) or exempt develop
 from protection for back-merge PRs. Otherwise: no action, the degraded mode is
 handled automatically.
+
+## gh-release-missing-for-tag
+A semver tag reachable from main has no GitHub Release. The release/hotfix
+finish creates one per tag when `release.githubRelease` is true (the default);
+this catches tags pushed by hand or finishes interrupted before the last step.
+Create it from the existing tag — never let `gh release create` invent one:
+```bash
+gh release create vX.Y.Z --verify-tag --generate-notes --title vX.Y.Z
+```
+Repos that do not publish Releases set `release.githubRelease: false`
+(`--no-github-release`) and the check reports `skipped`.
+
+## homebrew-formula-stale
+Only when `homebrew.tap`/`homebrew.formula` are configured: the formula's `url`
+in the tap does not point at the latest tag's tarball. The release/hotfix
+finish does this as its `homebrew-formula` step (references/finish-release.md
+§ 7b) — resume it with `gitdoctor finish`, or by hand:
+```bash
+TAG=vX.Y.Z; TAP=<owner>/homebrew-tap; F=Formula/<name>.rb
+SHA=$(curl -sL "https://github.com/<owner>/<repo>/archive/refs/tags/$TAG.tar.gz" | sha256sum | cut -d' ' -f1)
+gh api -H "Accept: application/vnd.github.raw" "repos/$TAP/contents/$F" >formula.rb
+sed -i -e "s|/tags/v[0-9.]*\.tar\.gz|/tags/$TAG.tar.gz|" -e "s|sha256 \"[0-9a-f]*\"|sha256 \"$SHA\"|" formula.rb
+BLOB=$(gh api "repos/$TAP/contents/$F" --jq .sha)
+gh api -X PUT "repos/$TAP/contents/$F" -f message="chore: <name> X.Y.Z" -f sha="$BLOB" -f content="$(base64 -w0 formula.rb)"
+```
+(macOS: `shasum -a 256` and `base64` without `-w0`.) Then `brew update && brew
+upgrade <name>` on a Mac proves the sha.

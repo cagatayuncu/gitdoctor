@@ -11,7 +11,12 @@ Differences from a release finish:
 
 ## Back-merge target selection
 
-The probe's `back-merged` step names the target:
+The probe's `back-merged` step names the target. A `release/*` branch counts
+as **open** only while it still has something to ship: its `vX.Y.Z` tag does
+not exist yet, or its tip is not yet in main. A branch whose version is already
+tagged and merged into main is a leftover from a completed finish — the probe
+ignores it here (and says so in the step `detail`), while the doctor keeps
+reporting it as `orphaned-release-branch` for cleanup.
 - **Zero open release branches** → develop (exactly like a release finish).
 - **Exactly one open `release/*`** → that release branch. The hotfix must
   flow into the pending release, which carries it to develop at its own
@@ -40,6 +45,9 @@ CI wait blocking a production fix: `finish --admin` maps to
 the default path.
 
 ## Everything else
+
+The `homebrew-formula` step (finish-release.md § 7b) applies to hotfix tags
+too — a patch release ships through the tap like any other.
 
 Version bump, PR-vs-local main leg, tag placement (`mergeCommit.oid` in PR
 mode), atomic push in local mode, conflict policy, branch deletion rules,

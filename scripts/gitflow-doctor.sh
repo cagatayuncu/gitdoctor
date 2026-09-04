@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # gitflow-doctor.sh — read-only Git Flow diagnostics and finish probes.
 #
-# Emits JSON findings describing anomalies and alignment problems in a
-# classic git-flow repository (main + develop + feature/release/hotfix).
+# Emits findings describing anomalies and alignment problems in a classic
+# git-flow repository (main + develop + feature/release/hotfix) as JSON (the
+# agent contract), JSON Lines, human text, Markdown, SARIF (code scanning) or a
+# baseline (ignoreFindings entries for .gitflow.json).
 # The ONLY mutation this script may perform is a remote-tracking cache
 # refresh (`git fetch origin --prune --tags`); disable it with --offline
 # or --no-fetch. Every other command is plumbing reads.
@@ -23,7 +25,7 @@ set -f # no pathname expansion: ref names may contain *?[ and several list
 LC_ALL=C
 export LC_ALL
 
-DOCTOR_VERSION="0.2.1"
+DOCTOR_VERSION="0.3.0"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 RELEASE_NAME_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 RELEASE_NAME_PRE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
@@ -32,6 +34,13 @@ RELEASE_NAME_PRE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 # Defaults (CLI flags > .gitflow.json sed-fallback > these)
 # ---------------------------------------------------------------------------
 FORMAT="json"
+EXPLAIN=""
+LIST_CHECKS=0
+CHANGELOG_FILE=""
+GITHUB_RELEASE=1
+REQUIRE_SIGNED_TAGS=0
+HOMEBREW_TAP=""
+HOMEBREW_FORMULA=""
 OFFLINE=0
 DO_FETCH=1
 NOW=""
@@ -65,7 +74,10 @@ VF_COUNT=0
 usage() {
   cat <<'EOF'
 usage: gitflow-doctor.sh [options]
-  --format json|jsonl        output format (default json)
+  --format FORMAT            json (default) | jsonl | text | markdown | sarif | baseline
+                             (probes always emit JSON; baseline always exits 0)
+  --explain CHECK-ID         print the fix recipe for one check and exit
+  --list-checks              print every check id and exit
   --offline                  no fetch, no gh, no network ls-remote
   --no-fetch                 skip the fetch but keep gh/ls-remote
   --now EPOCH                clock override for time-based checks
@@ -77,10 +89,17 @@ usage: gitflow-doctor.sh [options]
   --stale-days N --scan-depth N --max-releases N
   --merge-mode auto|pr|local
   --ignore-branches globs --ignore-tags globs --ignore-shas list
-  --ignore-findings list     entries: "check-id" or "check-id:sha"
+  --ignore-findings list     entries: "check-id" or "check-id:key" (key = the sha,
+                             branch, tag, file or PR the finding names; see --format baseline)
   --version-file PATH --version-pattern ERE   (repeatable, paired; POSIX ERE
                              matched per line, capture group 1 = version)
   --allow-prerelease         accept x.y.z-suffix in release/hotfix branch names
+  --changelog PATH           changelog file (enables changelog-tag-mismatch)
+  --no-github-release        repo does not publish GitHub Releases (skips gh-release-missing-for-tag)
+  --require-signed-tags      release tags must be GPG/SSH signed (enables tag-unsigned)
+  --homebrew-tap owner/repo --homebrew-formula PATH
+                             Homebrew tap that ships this repo (enables the
+                             homebrew-formula-stale check and the finish probe step)
   --assume-github owner/repo force GitHub mode even for non-github origin (tests)
   --probe finish-release|finish-hotfix|finish-feature --branch B [--version V]
 EOF
@@ -93,6 +112,13 @@ NL=$'\n'
 while [ $# -gt 0 ]; do
   case "$1" in
     --format) FORMAT=${2:?}; shift 2 ;;
+    --explain) EXPLAIN=${2:?}; shift 2 ;;
+    --list-checks) LIST_CHECKS=1; shift ;;
+    --changelog) CHANGELOG_FILE=${2:?}; shift 2 ;;
+    --no-github-release) GITHUB_RELEASE=0; shift ;;
+    --require-signed-tags) REQUIRE_SIGNED_TAGS=1; shift ;;
+    --homebrew-tap) HOMEBREW_TAP=${2:?}; shift 2 ;;
+    --homebrew-formula) HOMEBREW_FORMULA=${2:?}; shift 2 ;;
     --offline) OFFLINE=1; shift ;;
     --no-fetch) DO_FETCH=0; shift ;;
     --now) NOW=${2:?}; shift 2 ;;
@@ -126,7 +152,63 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-case "$FORMAT" in json|jsonl) : ;; *) die_usage "--format must be json or jsonl" ;; esac
+case "$FORMAT" in json|jsonl|text|markdown|sarif|baseline) : ;; *) die_usage "--format must be json, jsonl, text, markdown, sarif or baseline" ;; esac
+
+# ---------------------------------------------------------------------------
+# Check catalog (the authoritative id list; README/action counts derive from it)
+# ---------------------------------------------------------------------------
+ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift multiple-release-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale"
+RECIPES_URL="https://github.com/cagatayuncu/gitdoctor/blob/main/references/fix-recipes.md"
+
+known_check_id() { case " $ALL_CHECK_IDS " in *" $1 "*) return 0 ;; esac; return 1; }
+validate_check_list() { # flag-name comma-list
+  local rest="$2," id
+  while [ -n "$rest" ]; do
+    id=${rest%%,*}; rest=${rest#*,}
+    [ -z "$id" ] && continue
+    known_check_id "$id" || die_usage "$1: unknown check id '$id' (see --list-checks)"
+  done
+}
+[ -n "$ONLY_CHECKS" ] && validate_check_list --checks "$ONLY_CHECKS"
+[ -n "$SKIP_CHECKS" ] && validate_check_list --skip "$SKIP_CHECKS"
+
+if [ "$LIST_CHECKS" = 1 ]; then
+  for id in $ALL_CHECK_IDS; do printf '%s\n' "$id"; done
+  exit 0
+fi
+
+recipe_anchor_v() { # varname check-id -> anchor in fix-recipes.md (a few ids share a recipe)
+  case "$2" in
+    back-merge-content-only) printf -v "$1" 'missing-back-merge' ;;
+    orphaned-hotfix-branch) printf -v "$1" 'orphaned-release-branch' ;;
+    *) printf -v "$1" '%s' "$2" ;;
+  esac
+}
+
+if [ -n "$EXPLAIN" ]; then
+  known_check_id "$EXPLAIN" || die_usage "--explain: unknown check id '$EXPLAIN' (see --list-checks)"
+  recipe_anchor_v anchor "$EXPLAIN"
+  script_dir=${BASH_SOURCE[0]%/*}
+  [ "$script_dir" = "${BASH_SOURCE[0]}" ] && script_dir=.
+  recipes_file="$script_dir/../references/fix-recipes.md"
+  if [ ! -f "$recipes_file" ]; then
+    # shellcheck disable=SC2154 # anchor is assigned via printf -v inside recipe_anchor_v
+    printf 'recipe file not found next to this script (%s)\nread it online: %s#%s\n' "$recipes_file" "$RECIPES_URL" "$anchor"
+    exit 0
+  fi
+  printing=0; found=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    case "$line" in
+      "## $anchor") printing=1; found=1 ;;
+      "## "*) [ "$printing" = 1 ] && break ;;
+    esac
+    [ "$printing" = 1 ] && printf '%s\n' "$line"
+  done <"$recipes_file"
+  [ "$found" = 1 ] || { echo "gitflow-doctor: no recipe section '## $anchor' in $recipes_file" >&2; exit 4; }
+  printf '(online: %s#%s)\n' "$RECIPES_URL" "$anchor"
+  exit 0
+fi
 case "$MIN_SEVERITY" in
   info) MIN_RANK=1 ;;
   warning) MIN_RANK=2 ;;
@@ -163,6 +245,12 @@ capture_all() { # varname cmd...  (all output lines, newline-joined, no trailing
   printf -v "$__v" '%s' "$__acc"
 }
 
+clear_v() { # varname — assign the empty string. NOT `printf -v v ''`: bash 3.2 (macOS)
+  # leaves the variable unset when the formatted result is empty, and `set -u`
+  # then aborts on the first read. `read` at EOF assigns "" on every bash.
+  IFS= read -r "$1" </dev/null || :
+}
+
 json_str_v() { # varname value — JSON-escape into varname
   local s=$2
   s=${s//\\/\\\\}
@@ -192,6 +280,8 @@ count_lines_v() { # varname multiline-string
 # Finding accumulation
 # ---------------------------------------------------------------------------
 FINDINGS=""
+REC_LINES=""   # renderer records: kind US id US severity US title US confidence US recipe US key US fix-json|reason
+US=$'\x1f'
 N_CRIT=0; N_WARN=0; N_INFO=0; N_OK=0; N_SKIP=0
 WORST=0
 
@@ -235,10 +325,12 @@ glob_in_list() { # value comma-separated-globs
   return 1
 }
 
-fail_check() { # id severity title data_fragment fix_cmds_json recipe_anchor [confidence] [sha]
+fail_check() { # id severity title data_fragment fix_cmds_json recipe_anchor [confidence] [key]
+  # key = the sha/branch/tag/file/PR the finding is about; enables
+  # "id:key" suppression in --ignore-findings and --format baseline entries.
   local id=$1 sev=$2 title=$3 data=${4:-} fixcmds=${5:-[]} recipe=${6:-$1} conf=${7:-high} sha=${8:-}
   check_enabled "$id" || return 0
-  if ignored_finding "$id" "$sha"; then skip_check "$id" "config-ignored"; return 0; fi
+  if ignored_finding "$id" "$sha"; then skip_check "$id" "config-ignored" "check skipped" "$sha"; return 0; fi
   local rank=1
   case "$sev" in critical) rank=3 ;; warning) rank=2 ;; esac
   if [ "$rank" -lt "$MIN_RANK" ]; then N_OK=$((N_OK + 1)); return 0; fi
@@ -253,18 +345,141 @@ fail_check() { # id severity title data_fragment fix_cmds_json recipe_anchor [co
   obj="{\"id\":\"$id\",\"severity\":\"$sev\",\"status\":\"fail\",\"title\":\"$jt\""
   [ -n "$data" ] && obj="$obj,\"data\":{$data}"
   obj="$obj,\"fix\":{\"commands\":$fixcmds,\"recipeRef\":\"references/fix-recipes.md#$recipe\"}"
-  obj="$obj,\"confidence\":\"$conf\"}"
+  obj="$obj,\"confidence\":\"$conf\""
+  if [ -n "$sha" ]; then local jk; json_str_v jk "$sha"; obj="$obj,\"key\":\"$jk\""; fi
+  obj="$obj}"
   FINDINGS="$FINDINGS${FINDINGS:+$NL}$obj"
+  REC_LINES="$REC_LINES${REC_LINES:+$NL}fail$US$id$US$sev$US${title//$NL/ }$US$conf$US$recipe$US$sha$US$fixcmds"
 }
 
 ok_check() { check_enabled "$1" || return 0; N_OK=$((N_OK + 1)); }
 
-skip_check() { # id reason [title]
-  local id=$1 reason=$2 title=${3:-check skipped} jt
+skip_check() { # id reason [title] [key]
+  local id=$1 reason=$2 title=${3:-check skipped} key=${4:-} jt
   check_enabled "$id" || return 0
   N_SKIP=$((N_SKIP + 1))
   json_str_v jt "$title"
   FINDINGS="$FINDINGS${FINDINGS:+$NL}{\"id\":\"$id\",\"severity\":\"info\",\"status\":\"skipped\",\"title\":\"$jt\",\"data\":{\"reason\":\"$reason\"}}"
+  REC_LINES="$REC_LINES${REC_LINES:+$NL}skip$US$id${US}info$US$title$US$US$US$key$US$reason"
+}
+
+json_arr_unpack_v() { # varname json-array-of-strings -> newline list (inverse of json_arr_v)
+  local __ju_v=$1 __ju_s=$2 __ju_out="" __ju_item
+  __ju_s=${__ju_s#[}; __ju_s=${__ju_s%]}
+  if [ -z "$__ju_s" ]; then clear_v "$__ju_v"; return; fi
+  __ju_s=${__ju_s#\"}; __ju_s=${__ju_s%\"}
+  while :; do
+    case "$__ju_s" in
+      *'","'*) __ju_item=${__ju_s%%'","'*}; __ju_s=${__ju_s#*'","'} ;;
+      *) __ju_item=$__ju_s; __ju_s="" ;;
+    esac
+    __ju_item=${__ju_item//\\\"/\"}
+    __ju_item=${__ju_item//\\n/$NL}
+    __ju_item=${__ju_item//\\t/$'\t'}
+    __ju_item=${__ju_item//\\\\/\\}
+    __ju_out="$__ju_out${__ju_out:+$NL}$__ju_item"
+    [ -z "$__ju_s" ] && break
+  done
+  printf -v "$__ju_v" '%s' "$__ju_out"
+}
+
+render_text() {
+  local rec kind id sev title conf recipe key fix cmds c label
+  printf 'gitdoctor %s  %s\n' "$DOCTOR_VERSION" "${REPO_ROOT:-$PWD}"
+  printf 'main: %s  develop: %s  github: %s  merge-mode: %s (main=%s, develop=%s)\n\n' \
+    "${MAIN:-?}" "${DEVELOP:-?}" "${SLUG:--}" "$MERGE_MODE" "${RESOLVED_MAIN_MODE:-unknown}" "${RESOLVED_DEV_MODE:-unknown}"
+  [ -z "$REC_LINES" ] && printf 'no findings\n'
+  while IFS="$US" read -r kind id sev title conf recipe key fix; do
+    [ -z "$kind" ] && continue
+    if [ "$kind" = skip ]; then
+      printf 'SKIP  %s  (%s)\n' "$id" "$fix"
+      continue
+    fi
+    case "$sev" in critical) label=CRIT ;; warning) label=WARN ;; *) label=INFO ;; esac
+    printf '%s  %s  %s\n' "$label" "$id" "$title"
+    json_arr_unpack_v cmds "$fix"
+    c="fix:"
+    while IFS= read -r rec; do
+      [ -z "$rec" ] && continue
+      printf '      %-4s %s\n' "$c" "$rec"; c=""
+    done <<<"$cmds"
+    printf '      recipe: references/fix-recipes.md#%s' "$recipe"
+    [ "$conf" != high ] && printf '   (confidence: %s)' "$conf"
+    printf '\n'
+  done <<<"$REC_LINES"
+  printf '\n%s critical, %s warning, %s info, %s ok, %s skipped\n' "$N_CRIT" "$N_WARN" "$N_INFO" "$N_OK" "$N_SKIP"
+}
+
+render_markdown() {
+  local kind id sev title conf recipe key fix cmds icon
+  if [ "$N_CRIT" -gt 0 ]; then printf '## :red_circle: gitdoctor: %s critical finding(s)\n\n' "$N_CRIT"
+  elif [ "$N_WARN" -gt 0 ]; then printf '## :yellow_circle: gitdoctor: %s warning(s)\n\n' "$N_WARN"
+  else printf '## :green_circle: gitdoctor: clean\n\n'; fi
+  # shellcheck disable=SC2016 # literal markdown backticks
+  printf '`%s critical · %s warning · %s info · %s ok · %s skipped`\n\n' "$N_CRIT" "$N_WARN" "$N_INFO" "$N_OK" "$N_SKIP"
+  if [ $((N_CRIT + N_WARN + N_INFO)) -gt 0 ]; then
+    printf '| | Check | Finding |\n|---|---|---|\n'
+    while IFS="$US" read -r kind id sev title conf recipe key fix; do
+      [ "$kind" = fail ] || continue
+      case "$sev" in critical) icon=':red_circle:' ;; warning) icon=':yellow_circle:' ;; *) icon=':large_blue_circle:' ;; esac
+      title=${title//|/\\|}
+      # shellcheck disable=SC2016 # literal markdown backticks
+      printf '| %s | `%s` | %s |\n' "$icon" "$id" "$title"
+    done <<<"$REC_LINES"
+    printf '\n<details><summary>Fix commands</summary>\n\n'
+    while IFS="$US" read -r kind id sev title conf recipe key fix; do
+      [ "$kind" = fail ] || continue
+      json_arr_unpack_v cmds "$fix"
+      # shellcheck disable=SC2016 # literal markdown code fence
+      printf '**%s** ([recipe](%s#%s))\n```bash\n%s\n```\n\n' "$id" "$RECIPES_URL" "$recipe" "$cmds"
+    done <<<"$REC_LINES"
+    printf '</details>\n'
+  fi
+  printf '\n_[gitdoctor](https://github.com/cagatayuncu/gitdoctor) %s · read-only scan_\n' "$DOCTOR_VERSION"
+}
+
+render_sarif() {
+  local kind id sev title conf recipe key fix cmds level rules="" results="" seen=" " jt jc jk jr msg
+  while IFS="$US" read -r kind id sev title conf recipe key fix; do
+    [ "$kind" = fail ] || continue
+    case "$sev" in critical) level=error ;; warning) level=warning ;; *) level=note ;; esac
+    case "$seen" in
+      *" $id "*) : ;;
+      *)
+        seen="$seen$id "
+        rules="$rules${rules:+,}{\"id\":\"$id\",\"name\":\"$id\",\"shortDescription\":{\"text\":\"$id\"},\"helpUri\":\"$RECIPES_URL#$recipe\",\"defaultConfiguration\":{\"level\":\"$level\"}}" ;;
+    esac
+    json_arr_unpack_v cmds "$fix"
+    msg=$title
+    [ -n "$cmds" ] && msg="$title$NL${NL}Fix:$NL$cmds"
+    json_str_v jt "$msg"; json_str_v jk "$key"; json_str_v jc "$conf"
+    jr="{\"ruleId\":\"$id\",\"level\":\"$level\",\"message\":{\"text\":\"$jt\"}"
+    jr="$jr,\"locations\":[{\"physicalLocation\":{\"artifactLocation\":{\"uri\":\".gitflow.json\",\"uriBaseId\":\"%SRCROOT%\"},\"region\":{\"startLine\":1}}}]"
+    jr="$jr,\"partialFingerprints\":{\"gitdoctorKey\":\"$id:${jk:--}\"},\"properties\":{\"confidence\":\"$jc\",\"key\":\"$jk\"}}"
+    results="$results${results:+,}$jr"
+  done <<<"$REC_LINES"
+  # shellcheck disable=SC2016 # "$schema" is a literal SARIF key
+  printf '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitdoctor","version":"%s","informationUri":"https://github.com/cagatayuncu/gitdoctor","rules":[%s]}},"invocations":[{"executionSuccessful":true}],"results":[%s]}]}\n' \
+    "$DOCTOR_VERSION" "$rules" "$results"
+}
+
+render_baseline() { # every failing finding as an ignoreFindings entry, plus the entries already configured
+  local kind id sev title conf recipe key fix entry seen=" " out="" je rest
+  rest="$IGNORE_FINDINGS,"
+  while [ -n "$rest" ]; do
+    entry=${rest%%,*}; rest=${rest#*,}
+    [ -z "$entry" ] && continue
+    case "$seen" in *" $entry "*) continue ;; esac
+    seen="$seen$entry "; json_str_v je "$entry"; out="$out${out:+,}\"$je\""
+  done
+  while IFS="$US" read -r kind id sev title conf recipe key fix; do
+    [ -z "$kind" ] && continue
+    case "$kind" in fail) : ;; skip) [ "$fix" = config-ignored ] || continue ;; *) continue ;; esac
+    entry=$id; [ -n "$key" ] && entry="$id:$key"
+    case "$seen" in *" $entry "*) continue ;; esac
+    seen="$seen$entry "; json_str_v je "$entry"; out="$out${out:+,}\"$je\""
+  done <<<"$REC_LINES"
+  printf '{"doctor":{"ignoreFindings":[%s]}}\n' "$out"
 }
 
 print_output() {
@@ -274,6 +489,12 @@ print_output() {
   json_str_v jr "${REPO_ROOT:-}"; json_str_v js "${SLUG:-}"
   json_str_v jm "${MAIN:-}"; json_str_v jd "${DEVELOP:-}"
   repo="{\"root\":\"$jr\",\"github\":\"$js\",\"main\":\"$jm\",\"develop\":\"$jd\",\"mergeMode\":{\"configured\":\"$MERGE_MODE\",\"resolved\":{\"main\":\"${RESOLVED_MAIN_MODE:-unknown}\",\"develop\":\"${RESOLVED_DEV_MODE:-unknown}\"}}}"
+  case "$FORMAT" in
+    text) render_text; return ;;
+    markdown) render_markdown; return ;;
+    sarif) render_sarif; return ;;
+    baseline) render_baseline; return ;;
+  esac
   if [ "$FORMAT" = jsonl ]; then
     [ -n "$FINDINGS" ] && printf '%s\n' "$FINDINGS"
     printf '{"gitflowDoctor":"%s","repo":%s,"summary":%s}\n' "$DOCTOR_VERSION" "$repo" "$summary"
@@ -288,6 +509,7 @@ print_output() {
 
 finish_exit() {
   print_output
+  [ "$FORMAT" = baseline ] && exit 0 # a baseline is data, not a verdict
   case "$WORST" in 3) exit 2 ;; 2) exit 1 ;; *) exit 0 ;; esac
 }
 
@@ -307,28 +529,39 @@ fi
 { IFS= read -r _in_tree; IFS= read -r REPO_ROOT; IFS= read -r _shallow; } <<<"$BOOT"
 SHALLOW=0; [ "$_shallow" = true ] && SHALLOW=1
 
-# .gitflow.json sed fallback: ONE sed pass extracts the six scalar keys.
+# .gitflow.json fallback for standalone runs (hooks, CI action, brew users): a
+# zero-spawn scan of the scalar keys the doctor understands; the agent passes
+# everything as flags, which always win. Several keys may share one line.
 CONFIG_FILE="$REPO_ROOT/.gitflow.json"
+CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
 if [ -f "$CONFIG_FILE" ]; then
-  CFG=""
-  capture_all CFG sed -n \
-    -e 's/.*"main"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/main=\1/p' \
-    -e 's/.*"develop"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/develop=\1/p' \
-    -e 's/.*"tagPrefix"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/tagPrefix=\1/p' \
-    -e 's/.*"mergeMode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/mergeMode=\1/p' \
-    -e 's/.*"staleDays"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/staleDays=\1/p' \
-    -e 's/.*"maxConcurrent"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/maxConcurrent=\1/p' \
-    "$CONFIG_FILE"
-  while IFS= read -r line; do
-    case "$line" in
-      main=*) [ -z "$MAIN" ] && MAIN=${line#main=} ;;
-      develop=*) [ -z "$DEVELOP" ] && DEVELOP=${line#develop=} ;;
-      tagPrefix=*) [ "$TAG_PREFIX" = "__UNSET__" ] && TAG_PREFIX=${line#tagPrefix=} ;;
-      mergeMode=*) [ "$MERGE_MODE" = auto ] && MERGE_MODE=${line#mergeMode=} ;;
-      staleDays=*) [ -z "$STALE_DAYS" ] && STALE_DAYS=${line#staleDays=} ;;
-      maxConcurrent=*) [ -z "$MAX_RELEASES" ] && MAX_RELEASES=${line#maxConcurrent=} ;;
-    esac
-  done <<<"$CFG"
+  CFG_CL_BLOCK=0; CFG_CL_FILE=""; CFG_CL_ENABLED=true
+  while IFS= read -r line || [ -n "$line" ]; do
+    while [[ $line =~ $CFG_KEY_RE ]]; do
+      key=${BASH_REMATCH[1]}; val=${BASH_REMATCH[2]}
+      case "$val" in \"*) val=${BASH_REMATCH[3]} ;; esac
+      line=${line#*"${BASH_REMATCH[0]}"}
+      case "$key" in
+        main) [ -z "$MAIN" ] && MAIN=$val ;;
+        develop) [ -z "$DEVELOP" ] && DEVELOP=$val ;;
+        tagPrefix) [ "$TAG_PREFIX" = "__UNSET__" ] && TAG_PREFIX=$val ;;
+        mergeMode) [ "$MERGE_MODE" = auto ] && MERGE_MODE=$val ;;
+        staleDays) [ -z "$STALE_DAYS" ] && STALE_DAYS=$val ;;
+        maxConcurrent) [ -z "$MAX_RELEASES" ] && MAX_RELEASES=$val ;;
+        changelog) [ "$val" = "{" ] && CFG_CL_BLOCK=1 ;; # the block, not backmerge.conflictPolicy.changelog
+        file) CFG_CL_FILE=$val ;;
+        enabled) CFG_CL_ENABLED=$val ;;
+        githubRelease) [ "$val" = false ] && GITHUB_RELEASE=0 ;;
+        signedTags) [ "$val" = true ] && REQUIRE_SIGNED_TAGS=1 ;;
+        tap) [ -z "$HOMEBREW_TAP" ] && HOMEBREW_TAP=$val ;;
+        formula) [ -z "$HOMEBREW_FORMULA" ] && HOMEBREW_FORMULA=$val ;;
+      esac
+    done
+  done <"$CONFIG_FILE"
+  # changelog block present and not disabled -> its file (default CHANGELOG.md)
+  if [ -z "$CHANGELOG_FILE" ] && [ "$CFG_CL_BLOCK" = 1 ] && [ "$CFG_CL_ENABLED" != false ]; then
+    CHANGELOG_FILE=${CFG_CL_FILE:-CHANGELOG.md}
+  fi
 fi
 [ "$TAG_PREFIX" = "__UNSET__" ] && TAG_PREFIX=v
 [ -z "$DEVELOP" ] && DEVELOP=develop
@@ -423,7 +656,7 @@ lookup_line() { # varname haystack key  -> line starting "key "
   # NOTE: internal names are __ll_-prefixed: bash locals are dynamically
   # scoped, so an unprefixed local would shadow the caller's target varname.
   local __ll_v=$1 __ll_line
-  printf -v "$__ll_v" ''
+  clear_v "$__ll_v"
   while IFS= read -r __ll_line; do
     case "$__ll_line" in "$3 "*) printf -v "$__ll_v" '%s' "$__ll_line"; return 0 ;; esac
   done <<<"$2"
@@ -439,7 +672,7 @@ tag_commit_v() { # varname tagname
     L=${L#* }
     printf -v "$1" '%s' "${L%% *}"
   else
-    printf -v "$1" ''
+    clear_v "$1"
   fi
 }
 sha_is_tagged() { case "$TAGGED_SHAS" in *" $1 "*) return 0 ;; esac; return 1; }
@@ -447,12 +680,12 @@ sha_is_tagged() { case "$TAGGED_SHAS" in *" $1 "*) return 0 ;; esac; return 1; }
 branch_ref_v() { # varname shortname -> refs/remotes/origin/N or refs/heads/N or ""
   if remote_branch_exists "$2"; then printf -v "$1" 'refs/remotes/origin/%s' "$2"
   elif local_branch_exists "$2"; then printf -v "$1" 'refs/heads/%s' "$2"
-  else printf -v "$1" ''; fi
+  else clear_v "$1"; fi
 }
 
 list_branches_v() { # varname glob -> newline list of unique short names (local+remote)
   local __v=$1 pat=$2 line name out="" seen=" "
-  printf -v "$__v" ''
+  clear_v "$__v"
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     name=${line%% *}
@@ -538,6 +771,28 @@ content_absorbed_into() { # base_ref other_ref (generic; 2 spawns)
   [ "$tree" = "$base" ]
 }
 
+release_is_finished() { # release branch short name -> 0 when that version already shipped
+  local __rf_ver="" __rf_tag="" __rf_ref=""
+  case "$1" in "$RELEASE_PREFIX"*) __rf_ver=${1#"$RELEASE_PREFIX"} ;; *) return 1 ;; esac
+  __rf_tag="${TAG_PREFIX}${__rf_ver}"
+  tag_exists "$__rf_tag" || return 1
+  [ -n "$R_MAIN" ] || return 1
+  branch_ref_v __rf_ref "$1"
+  [ -n "$__rf_ref" ] || return 1
+  git merge-base --is-ancestor "$__rf_ref" "$R_MAIN" 2>/dev/null && return 0
+  content_absorbed_into "$R_MAIN" "$__rf_ref"
+}
+
+open_releases_v() { # varname newline-list -> entries that have NOT shipped yet
+  local __or_v=$1 __or_br __or_out=""
+  while IFS= read -r __or_br; do
+    [ -z "$__or_br" ] && continue
+    release_is_finished "$__or_br" && continue
+    __or_out="$__or_out${__or_out:+$NL}$__or_br"
+  done <<<"$2"
+  printf -v "$__or_v" '%s' "$__or_out"
+}
+
 conflicts_predicted() { # ref_a ref_b
   [ "$MERGETREE_OK" = 1 ] || return 1
   ! git merge-tree --write-tree --no-messages "$1" "$2" >/dev/null 2>&1
@@ -545,7 +800,7 @@ conflicts_predicted() { # ref_a ref_b
 
 extract_version_v() { # varname ref path pattern — ERE with capture group 1, one process
   local __v=$1 ref=$2 path=$3 pat=$4 content="" line
-  printf -v "$__v" ''
+  clear_v "$__v"
   capture_all content git show "$ref:$path"
   while IFS= read -r line; do
     if [[ $line =~ $pat ]]; then
@@ -558,12 +813,12 @@ extract_version_v() { # varname ref path pattern — ERE with capture group 1, o
 
 vf_path_v() { # varname index(0-based)
   local i=0 line
-  printf -v "$1" ''
+  clear_v "$1"
   while IFS= read -r line; do [ "$i" = "$2" ] && { printf -v "$1" '%s' "$line"; return; }; i=$((i + 1)); done <<<"$VF_PATHS"
 }
 vf_pattern_v() {
   local i=0 line
-  printf -v "$1" ''
+  clear_v "$1"
   while IFS= read -r line; do [ "$i" = "$2" ] && { printf -v "$1" '%s' "$line"; return; }; i=$((i + 1)); done <<<"$VF_PATTERNS"
 }
 
@@ -585,6 +840,22 @@ resolve_mode_v() { # varname protected-value
 }
 resolve_mode_v RESOLVED_MAIN_MODE "$PROT_MAIN"
 resolve_mode_v RESOLVED_DEV_MODE "$PROT_DEV"
+
+homebrew_configured() { [ -n "$HOMEBREW_TAP" ] && [ -n "$HOMEBREW_FORMULA" ]; }
+tap_formula_v() { # varname -> raw formula from the tap's default branch ("" on failure); one gh call
+  capture_all "$1" gh api -H "Accept: application/vnd.github.raw" "repos/$HOMEBREW_TAP/contents/$HOMEBREW_FORMULA"
+}
+formula_has_tag() { # formula-content tag -> the url line points at that tag's tarball
+  case "$1" in *"/tags/$2.tar.gz"*) return 0 ;; esac
+  return 1
+}
+formula_tag_v() { # varname formula-content -> the tag the url currently ships ("" if none)
+  local __ft=$2
+  case "$__ft" in
+    *"/tags/"*".tar.gz"*) __ft=${__ft##*/tags/}; printf -v "$1" '%s' "${__ft%%.tar.gz*}" ;;
+    *) clear_v "$1" ;;
+  esac
+}
 
 # ===========================================================================
 # PROBE MODE
@@ -727,14 +998,17 @@ run_probe() {
     # back-merged
     local bm_target=$DEVELOP bm_note=""
     if [ "$PROBE" = finish-hotfix ]; then
-      local releases="" rcount=0
-      list_branches_v releases "${RELEASE_PREFIX}*"
+      local releases="" all_releases="" rcount=0
+      list_branches_v all_releases "${RELEASE_PREFIX}*"
+      open_releases_v releases "$all_releases"
       count_lines_v rcount "$releases"
       if [ "$rcount" -eq 1 ]; then
         bm_target=$releases; bm_note="open release takes the back-merge"
       elif [ "$rcount" -gt 1 ]; then
         add_step back-merged false "\"target\":\"ambiguous\",\"detail\":\"multiple open release branches — ask the user\""
         bm_target=""
+      elif [ -n "$all_releases" ]; then
+        bm_note="release branch(es) present but already shipped — $DEVELOP takes the back-merge"
       fi
     fi
     if [ -n "$bm_target" ]; then
@@ -780,6 +1054,26 @@ run_probe() {
       if [ -n "$rel" ]; then add_step gh-release true; else add_step gh-release false; fi
     else
       add_step gh-release false "\"detail\":\"gh unavailable ($GH_STATE)\""
+    fi
+  fi
+
+  # homebrew-formula (only when a tap is configured): the formula url must ship this tag
+  if [ "$PROBE" != finish-feature ] && homebrew_configured; then
+    json_str_v jt "$HOMEBREW_TAP/$HOMEBREW_FORMULA"
+    if [ "$GH_MODE" = 1 ]; then
+      local formula="" shipped=""
+      tap_formula_v formula
+      if [ -z "$formula" ]; then
+        add_step homebrew-formula false "\"formula\":\"$jt\",\"detail\":\"could not read the formula from the tap\""
+      elif formula_has_tag "$formula" "$tag"; then
+        add_step homebrew-formula true "\"formula\":\"$jt\""
+      else
+        formula_tag_v shipped "$formula"
+        json_str_v jb "$shipped"
+        add_step homebrew-formula false "\"formula\":\"$jt\",\"shipped\":\"$jb\",\"detail\":\"formula url does not point at $tag yet\""
+      fi
+    else
+      add_step homebrew-formula false "\"formula\":\"$jt\",\"detail\":\"gh unavailable ($GH_STATE)\""
     fi
   fi
 
@@ -925,17 +1219,17 @@ sync_check() { # branch-name is-main(1/0)
   if [ "$ahead" -gt 0 ] && [ "$behind" -gt 0 ]; then
     json_arr_v FIX "git log --oneline --left-right $b...origin/$b" "reconcile manually — never force-push shared branches"
     fail_check sync-diverged critical "local $b and origin/$b have diverged ($ahead vs $behind commits)" \
-      "\"branch\":\"$J\",\"ahead\":$ahead,\"behind\":$behind" "$FIX" sync-diverged
+      "\"branch\":\"$J\",\"ahead\":$ahead,\"behind\":$behind" "$FIX" sync-diverged high "$b"
   elif [ "$behind" -gt 0 ]; then
     json_arr_v FIX "git switch $b" "git merge --ff-only origin/$b"
     fail_check sync-behind warning "local $b is $behind commit(s) behind origin/$b" \
-      "\"branch\":\"$J\",\"behind\":$behind" "$FIX" sync-behind
+      "\"branch\":\"$J\",\"behind\":$behind" "$FIX" sync-behind high "$b"
   elif [ "$ahead" -gt 0 ]; then
     local sev=warning
     [ "$is_main" = 1 ] && sev=critical
     json_arr_v FIX "verify the commits are legitimate: git log origin/$b..$b" "git push origin $b"
     fail_check sync-ahead "$sev" "local $b is $ahead commit(s) ahead of origin/$b (unpushed)" \
-      "\"branch\":\"$J\",\"ahead\":$ahead" "$FIX" sync-ahead
+      "\"branch\":\"$J\",\"ahead\":$ahead" "$FIX" sync-ahead high "$b"
   else
     ok_check sync-status
   fi
@@ -946,7 +1240,7 @@ if any_enabled sync-behind sync-ahead sync-diverged; then
 fi
 
 # --- A.4 topology + A.5/A.6 checks that need both branches -------------------
-TOPO_IDS="missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift multiple-release-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch tag-not-on-main branch-stale-merged branch-stale-inactive"
+TOPO_IDS="missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift multiple-release-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main branch-stale-merged branch-stale-inactive"
 if [ -z "$R_MAIN" ] || [ -z "$R_DEV" ]; then
   for id in $TOPO_IDS; do skip_check "$id" "missing-main-or-develop"; done
 else
@@ -1073,6 +1367,7 @@ else
   list_branches_v FEATURES "${FEATURE_PREFIX}*"
   list_branches_v RELEASES "${RELEASE_PREFIX}*"
   list_branches_v HOTFIXES "${HOTFIX_PREFIX}*"
+  OPEN_RELEASES=""; open_releases_v OPEN_RELEASES "$RELEASES" # shipped leftovers are not open
   BM_OPEN=0; [ "${BM_COUNT:-0}" -gt 0 ] 2>/dev/null && BM_OPEN=1
 
   if any_enabled wrong-base-feature; then
@@ -1092,7 +1387,7 @@ else
         json_str_v J "$br"
         json_arr_v FIX "git rebase --onto origin/$DEVELOP \$(git merge-base origin/$MAIN $br) $br" "or recreate the branch from $DEVELOP"
         fail_check wrong-base-feature warning "$br contains $cnt $MAIN-only commit(s) — branched from $MAIN instead of $DEVELOP?" \
-          "\"branch\":\"$J\",\"mainOnlyCommits\":$cnt$rel" "$FIX" wrong-base-feature "$ANCESTRY_CONF"
+          "\"branch\":\"$J\",\"mainOnlyCommits\":$cnt$rel" "$FIX" wrong-base-feature "$ANCESTRY_CONF" "$br"
       fi
     done <<<"$FEATURES$NL$RELEASES"
     [ "$wb_found" = 0 ] && ok_check wrong-base-feature
@@ -1113,7 +1408,7 @@ else
         json_str_v J "$br"
         json_arr_v FIX "git switch -c $br-rebased origin/$MAIN" "git cherry-pick <fix commits>" "replace $br with the recreated branch"
         fail_check wrong-base-hotfix critical "$br contains $cnt $DEVELOP-only commit(s) — finishing it would ship unreleased work to production" \
-          "\"branch\":\"$J\",\"developOnlyCommits\":$cnt" "$FIX" wrong-base-hotfix "$ANCESTRY_CONF"
+          "\"branch\":\"$J\",\"developOnlyCommits\":$cnt" "$FIX" wrong-base-hotfix "$ANCESTRY_CONF" "$br"
       fi
     done <<<"$HOTFIXES"
     [ "$wh_found" = 0 ] && ok_check wrong-base-hotfix
@@ -1122,10 +1417,10 @@ else
   # release branch family
   if any_enabled multiple-release-branches; then
     rel_count=0
-    count_lines_v rel_count "$RELEASES"
+    count_lines_v rel_count "$OPEN_RELEASES"
     if [ "$rel_count" -gt "$MAX_RELEASES" ]; then
       # shellcheck disable=SC2086
-      json_arr_v REL_ARR $RELEASES
+      json_arr_v REL_ARR $OPEN_RELEASES
       json_arr_v FIX "finish or delete the older release before starting another"
       fail_check multiple-release-branches warning "$rel_count release branches open (max $MAX_RELEASES)" \
         "\"branches\":$REL_ARR" "$FIX" multiple-release-branches
@@ -1150,9 +1445,9 @@ else
         json_arr_v FIX "nothing now — classic git flow resolves this at finish back-merge" "preview: git merge-tree --write-tree origin/$DEVELOP $br"
         fail_check release-develop-drift "$sev" "$DEVELOP moved $behind commit(s) ahead of $br (back-merge pending: ${pending:-0})" \
           "\"branch\":\"$J\",\"developAhead\":$behind,\"pendingBackMerge\":${pending:-0},\"conflictsPredicted\":$cp" \
-          "$FIX" release-develop-drift
+          "$FIX" release-develop-drift high "$br"
       fi
-    done <<<"$RELEASES"
+    done <<<"$OPEN_RELEASES"
     [ "$drift_found" = 0 ] && ok_check release-develop-drift
   fi
 
@@ -1171,9 +1466,13 @@ else
       if tag_exists "$tag"; then
         orph_found=1
         json_str_v J "$br"; json_str_v JT "$tag"
-        json_arr_v FIX "resume: gitdoctor finish (probe walk completes back-merge/deletion)" "or after verifying merge: git push origin --delete $br"
+        if remote_branch_exists "$br"; then
+          json_arr_v FIX "resume: gitdoctor finish (probe walk completes back-merge/deletion)" "or after verifying merge: git push origin --delete $br && git branch -d $br"
+        else
+          json_arr_v FIX "resume: gitdoctor finish (probe walk completes back-merge/deletion)" "or after verifying merge (local-only leftover): git branch -d $br"
+        fi
         fail_check "orphaned-$kind-branch" warning "$br still exists but $tag is already tagged — an unfinished finish" \
-          "\"branch\":\"$J\",\"tag\":\"$JT\"" "$FIX" orphaned-release-branch
+          "\"branch\":\"$J\",\"tag\":\"$JT\"" "$FIX" orphaned-release-branch high "$br"
         continue
       fi
       if [ "$kind" = release ] && [ -n "$LATEST_TAG" ] && [[ $ver =~ $SEMVER_RE ]]; then
@@ -1183,7 +1482,7 @@ else
           json_str_v J "$br"; json_str_v JT "$LATEST_TAG"
           json_arr_v FIX "git branch -m $br ${RELEASE_PREFIX}<next-version>" "git push origin :$br ${RELEASE_PREFIX}<next-version>"
           fail_check release-version-collision warning "$br targets version $ver but $LATEST_TAG is already released" \
-            "\"branch\":\"$J\",\"latestTag\":\"$JT\"" "$FIX" release-version-collision
+            "\"branch\":\"$J\",\"latestTag\":\"$JT\"" "$FIX" release-version-collision high "$br"
         fi
       fi
     done <<<"$RELEASES$NL$HOTFIXES"
@@ -1210,11 +1509,43 @@ else
           json_str_v J "$p"; json_str_v JG "$got"; json_str_v JL "$latest_ver"
           json_arr_v FIX "align on the next release/hotfix finish (version bump step)" "or hot-patch the file via a hotfix branch"
           fail_check version-file-tag-mismatch warning "$p on $MAIN says $got but the latest tag is $LATEST_TAG" \
-            "\"file\":\"$J\",\"fileVersion\":\"$JG\",\"tagVersion\":\"$JL\"" "$FIX" version-file-tag-mismatch
+            "\"file\":\"$J\",\"fileVersion\":\"$JG\",\"tagVersion\":\"$JL\"" "$FIX" version-file-tag-mismatch high "$p"
         fi
         i=$((i + 1))
       done
       [ "$vf_bad" = 0 ] && ok_check version-file-tag-mismatch
+    fi
+  fi
+
+  # changelog <-> tag: the latest release must have a heading in the changelog on main
+  if any_enabled changelog-tag-mismatch; then
+    if [ -z "$CHANGELOG_FILE" ]; then
+      skip_check changelog-tag-mismatch not-configured
+    elif [ -z "$LATEST_TAG" ]; then
+      skip_check changelog-tag-mismatch no-semver-tags
+    else
+      latest_ver=${LATEST_TAG#"$TAG_PREFIX"}
+      CL_CONTENT=""
+      capture_all CL_CONTENT git show "$R_MAIN:$CHANGELOG_FILE"
+      cl_found=0
+      if [ -n "$CL_CONTENT" ]; then
+        ver_re=${latest_ver//./\\.}
+        cl_re="(^|[^0-9.])${ver_re}([^0-9.]|$)"
+        while IFS= read -r line; do
+          case "$line" in "#"*) : ;; *) continue ;; esac
+          if [[ $line =~ $cl_re ]]; then cl_found=1; break; fi
+        done <<<"$CL_CONTENT"
+      fi
+      if [ "$cl_found" = 1 ]; then
+        ok_check changelog-tag-mismatch
+      else
+        detail="no heading mentions $latest_ver"
+        [ -z "$CL_CONTENT" ] && detail="file missing on $MAIN"
+        json_str_v J "$CHANGELOG_FILE"; json_str_v JT "$LATEST_TAG"; json_str_v JL "$latest_ver"; json_str_v JD "$detail"
+        json_arr_v FIX "add a '## $latest_ver' section to $CHANGELOG_FILE during the next release/hotfix finish" "or hot-patch it now via a hotfix branch (changelog-only change)"
+        fail_check changelog-tag-mismatch warning "$CHANGELOG_FILE on $MAIN has no entry for $LATEST_TAG ($detail)" \
+          "\"file\":\"$J\",\"tag\":\"$JT\",\"tagVersion\":\"$JL\",\"detail\":\"$JD\"" "$FIX" changelog-tag-mismatch high "$LATEST_TAG"
+      fi
     fi
   fi
 
@@ -1231,7 +1562,7 @@ else
         json_str_v J "$t"
         json_arr_v FIX "resume the finish so the tagged commit reaches $MAIN" "or retag the real release commit after investigating"
         fail_check tag-not-on-main warning "tag $t is not reachable from $MAIN — an interrupted finish?" \
-          "\"tag\":\"$J\",\"target\":\"$tsha\"" "$FIX" tag-not-on-main "$ANCESTRY_CONF"
+          "\"tag\":\"$J\",\"target\":\"$tsha\"" "$FIX" tag-not-on-main "$ANCESTRY_CONF" "$t"
       fi
     done <<<"$TAG_LINES"
     [ "$tnm_found" = 0 ] && ok_check tag-not-on-main
@@ -1259,7 +1590,7 @@ else
         sm_found=1
         json_arr_v FIX "git push origin --delete $br" "git branch $delflag $br"
         fail_check branch-stale-merged info "$br is already merged into $DEVELOP ($method) but not deleted" \
-          "\"branch\":\"$J\",\"method\":\"$method\"" "$FIX" branch-stale-merged "$conf"
+          "\"branch\":\"$J\",\"method\":\"$method\"" "$FIX" branch-stale-merged "$conf" "$br"
         continue
       fi
       line=""
@@ -1271,7 +1602,7 @@ else
         days=$(((NOW - cdate) / 86400))
         json_arr_v FIX "finish it, delete it, or revive: git rebase origin/$DEVELOP $br"
         fail_check branch-stale-inactive info "$br has had no commits for $days days" \
-          "\"branch\":\"$J\",\"inactiveDays\":$days" "$FIX" branch-stale-inactive
+          "\"branch\":\"$J\",\"inactiveDays\":$days" "$FIX" branch-stale-inactive high "$br"
       fi
     done <<<"$FEATURES$NL$BMBR"
     [ "$sm_found" = 0 ] && ok_check branch-stale-merged
@@ -1290,7 +1621,7 @@ if any_enabled non-semver-tag; then
     ns_found=1
     json_str_v J "$t"
     json_arr_v FIX "leave it (historic) or: git tag -d $t && git push origin :refs/tags/$t" "or add it to doctor.ignoreTags"
-    fail_check non-semver-tag info "tag '$t' does not match ${TAG_PREFIX}X.Y.Z" "\"tag\":\"$J\"" "$FIX" non-semver-tag
+    fail_check non-semver-tag info "tag '$t' does not match ${TAG_PREFIX}X.Y.Z" "\"tag\":\"$J\"" "$FIX" non-semver-tag high "$t"
   done <<<"$TAG_LINES"
   [ "$ns_found" = 0 ] && ok_check non-semver-tag
 fi
@@ -1341,7 +1672,7 @@ if any_enabled tag-prefix-collision; then
         pc_found=1
         json_arr_v TARR "$t" "$bare"
         json_arr_v FIX "delete the unprefixed twin: git tag -d $bare && git push origin :refs/tags/$bare"
-        fail_check tag-prefix-collision warning "both '$t' and '$bare' exist" "\"tags\":$TARR" "$FIX" tag-prefix-collision
+        fail_check tag-prefix-collision warning "both '$t' and '$bare' exist" "\"tags\":$TARR" "$FIX" tag-prefix-collision high "$t"
       fi
     done <<<"$TAG_LINES"
   fi
@@ -1359,10 +1690,39 @@ if any_enabled tag-lightweight-release; then
         lw_found=1
         json_str_v J "$t"
         json_arr_v FIX "future tags: git tag -a" "optionally recreate: git tag -d $t && git tag -a $t <sha> -m ... && git push -f origin $t (coordinate first)"
-        fail_check tag-lightweight-release info "release tag $t is lightweight, not annotated" "\"tag\":\"$J\"" "$FIX" tag-lightweight-release ;;
+        fail_check tag-lightweight-release info "release tag $t is lightweight, not annotated" "\"tag\":\"$J\"" "$FIX" tag-lightweight-release high "$t" ;;
     esac
   done <<<"$TAG_LINES"
   [ "$lw_found" = 0 ] && ok_check tag-lightweight-release
+fi
+
+# tag-unsigned (opt-in): annotated + carrying a GPG/SSH signature; one for-each-ref
+if any_enabled tag-unsigned; then
+  if [ "$REQUIRE_SIGNED_TAGS" = 0 ]; then
+    skip_check tag-unsigned not-configured
+  else
+    SIGS=""
+    capture_all SIGS git for-each-ref --format='%(refname:short)%09%(contents:signature)' refs/tags
+    signed_tags=" "
+    while IFS= read -r line; do
+      case "$line" in *$'\t'*) : ;; *) continue ;; esac # continuation lines of a signature carry no tab
+      t=${line%%$'\t'*}; sig=${line#*$'\t'}
+      [ -n "$sig" ] && signed_tags="$signed_tags$t "
+    done <<<"$SIGS"
+    us_found=0
+    while IFS= read -r tl; do
+      [ -z "$tl" ] && continue
+      t=${tl%% *}
+      is_semver_tag "$t" || continue
+      glob_in_list "$t" "$IGNORE_TAGS" && continue
+      case "$tl" in *" tag") case "$signed_tags" in *" $t "*) continue ;; esac ;; esac
+      us_found=1
+      json_str_v J "$t"
+      json_arr_v FIX "sign future tags: git tag -s ${TAG_PREFIX}X.Y.Z -m \"Release X.Y.Z\" (or git config tag.gpgSign true)" "verify: git tag -v $t"
+      fail_check tag-unsigned warning "release tag $t is not signed (release.signedTags is on)" "\"tag\":\"$J\"" "$FIX" tag-unsigned high "$t"
+    done <<<"$TAG_LINES"
+    [ "$us_found" = 0 ] && ok_check tag-unsigned
+  fi
 fi
 
 # tag-unpushed + tag-sha-mismatch (one ls-remote for all tags)
@@ -1388,12 +1748,12 @@ if any_enabled tag-unpushed tag-sha-mismatch; then
       if [ -z "$rsha" ]; then
         up_found=1
         json_arr_v FIX "git push origin $t"
-        fail_check tag-unpushed warning "tag $t exists locally but not on origin" "\"tag\":\"$J\"" "$FIX" tag-unpushed
+        fail_check tag-unpushed warning "tag $t exists locally but not on origin" "\"tag\":\"$J\"" "$FIX" tag-unpushed high "$t"
       elif [ -n "$local_sha" ] && [ "$rsha" != "$local_sha" ]; then
         mm_found=1
         json_arr_v FIX "investigate before ANY finish — never force-push tags" "git show $t / git ls-remote --tags origin $t"
         fail_check tag-sha-mismatch critical "tag $t points at $local_sha locally but $rsha on origin" \
-          "\"tag\":\"$J\",\"local\":\"$local_sha\",\"remote\":\"$rsha\"" "$FIX" tag-sha-mismatch
+          "\"tag\":\"$J\",\"local\":\"$local_sha\",\"remote\":\"$rsha\"" "$FIX" tag-sha-mismatch high "$t"
       fi
     done <<<"$TAG_LINES"
     [ "$up_found" = 0 ] && ok_check tag-unpushed
@@ -1423,7 +1783,7 @@ if any_enabled branch-bad-version-name; then
       json_str_v J "$br"
       json_arr_v FIX "git branch -m $br <prefix>/X.Y.Z" "git push origin :$br <prefix>/X.Y.Z"
       fail_check branch-bad-version-name warning "$br: suffix '$ver' is not a bare X.Y.Z version" \
-        "\"branch\":\"$J\"" "$FIX" branch-bad-version-name
+        "\"branch\":\"$J\"" "$FIX" branch-bad-version-name high "$br"
     fi
   done <<<"$RELS$NL$HOTS"
   [ "$bn_found" = 0 ] && ok_check branch-bad-version-name
@@ -1444,13 +1804,13 @@ if any_enabled branch-unrecognized; then
     bu_found=1
     json_str_v J "$br"
     json_arr_v FIX "rename into a prefix: git branch -m $br ${FEATURE_PREFIX}$br" "or add a glob to doctor.ignoreBranches"
-    fail_check branch-unrecognized info "branch '$br' matches no git-flow prefix" "\"branch\":\"$J\"" "$FIX" branch-unrecognized
+    fail_check branch-unrecognized info "branch '$br' matches no git-flow prefix" "\"branch\":\"$J\"" "$FIX" branch-unrecognized high "$br"
   done <<<"$LOCAL_LINES$NL$REMOTE_LINES"
   [ "$bu_found" = 0 ] && ok_check branch-unrecognized
 fi
 
 # --- A.7 GitHub-side ----------------------------------------------------------
-GH_IDS="gh-protection-missing-main gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation"
+GH_IDS="gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag"
 if [ "$GH_MODE" = 1 ]; then
   if [ "$PROT_MAIN" = false ]; then
     json_str_v J "$MAIN"
@@ -1460,6 +1820,39 @@ if [ "$GH_MODE" = 1 ]; then
     skip_check gh-protection-missing-main "api-error"
   else
     ok_check gh-protection-missing-main
+  fi
+
+  if [ "$PROT_DEV" = false ]; then
+    json_str_v J "$DEVELOP"
+    json_arr_v FIX "enable protection (admin): gh api -X PUT repos/$SLUG/branches/$DEVELOP/protection ..." "keep merge commits allowed so back-merges from $MAIN stay visible by ancestry"
+    fail_check gh-protection-missing-develop info "$DEVELOP has no branch protection on GitHub" "\"branch\":\"$J\"" "$FIX" gh-protection-missing-develop
+  elif [ -z "$PROT_DEV" ]; then
+    skip_check gh-protection-missing-develop "api-error"
+  else
+    ok_check gh-protection-missing-develop
+  fi
+
+  if any_enabled gh-release-missing-for-tag; then
+    if [ "$GITHUB_RELEASE" = 0 ]; then
+      skip_check gh-release-missing-for-tag not-configured
+    elif [ -z "$LATEST_TAG" ]; then
+      skip_check gh-release-missing-for-tag no-semver-tags
+    else
+      REL_TAGS=""
+      capture_all REL_TAGS gh release list --limit 500 --json tagName --jq '.[].tagName'
+      rm_found=0
+      while IFS= read -r t; do
+        [ -z "$t" ] && continue
+        is_semver_tag "$t" || continue
+        glob_in_list "$t" "$IGNORE_TAGS" && continue
+        case "$NL$REL_TAGS$NL" in *"$NL$t$NL"*) continue ;; esac
+        rm_found=1
+        json_str_v J "$t"
+        json_arr_v FIX "gh release create $t --verify-tag --generate-notes --title $t" "or set release.githubRelease=false in .gitflow.json (--no-github-release)"
+        fail_check gh-release-missing-for-tag info "tag $t (on $MAIN) has no GitHub Release" "\"tag\":\"$J\"" "$FIX" gh-release-missing-for-tag high "$t"
+      done <<<"$MERGED_TAGS"
+      [ "$rm_found" = 0 ] && ok_check gh-release-missing-for-tag
+    fi
   fi
 
   if any_enabled gh-default-branch-unexpected; then
@@ -1488,7 +1881,7 @@ if [ "$GH_MODE" = 1 ]; then
             json_str_v JH "$phead"; json_str_v JB "$pbase"
             json_arr_v FIX "gh pr edit $num --base $DEVELOP"
             fail_check gh-open-pr-wrong-base warning "PR #$num: $phead targets $MAIN instead of $DEVELOP" \
-              "\"pr\":$num,\"head\":\"$JH\",\"base\":\"$JB\"" "$FIX" gh-open-pr-wrong-base
+              "\"pr\":$num,\"head\":\"$JH\",\"base\":\"$JB\"" "$FIX" gh-open-pr-wrong-base high "$num"
           fi ;;
       esac
     done <<<"$OPEN_PRS"
@@ -1509,6 +1902,33 @@ if [ "$GH_MODE" = 1 ]; then
   fi
 else
   for id in $GH_IDS; do skip_check "$id" "$GH_STATE"; done
+fi
+
+# --- A.8 distribution: Homebrew tap formula vs latest tag ------------------------
+if any_enabled homebrew-formula-stale; then
+  if ! homebrew_configured; then
+    skip_check homebrew-formula-stale not-configured
+  elif [ "$GH_MODE" != 1 ]; then
+    skip_check homebrew-formula-stale "$GH_STATE"
+  elif [ -z "$LATEST_TAG" ]; then
+    skip_check homebrew-formula-stale no-semver-tags
+  else
+    HB_FORMULA=""
+    tap_formula_v HB_FORMULA
+    if [ -z "$HB_FORMULA" ]; then
+      skip_check homebrew-formula-stale api-error
+    elif formula_has_tag "$HB_FORMULA" "$LATEST_TAG"; then
+      ok_check homebrew-formula-stale
+    else
+      hb_cur=""
+      formula_tag_v hb_cur "$HB_FORMULA"
+      json_str_v J "$HOMEBREW_TAP/$HOMEBREW_FORMULA"; json_str_v JT "$LATEST_TAG"; json_str_v JC "$hb_cur"
+      json_arr_v FIX "resume: gitdoctor finish (homebrew-formula step) — or by hand per references/fix-recipes.md#homebrew-formula-stale" \
+        "curl -sL https://github.com/$SLUG/archive/refs/tags/$LATEST_TAG.tar.gz | sha256sum"
+      fail_check homebrew-formula-stale warning "Homebrew formula $HOMEBREW_FORMULA in $HOMEBREW_TAP ships ${hb_cur:-an unknown version} but the latest tag is $LATEST_TAG" \
+        "\"formula\":\"$J\",\"formulaTag\":\"$JC\",\"latestTag\":\"$JT\"" "$FIX" homebrew-formula-stale high "$LATEST_TAG"
+    fi
+  fi
 fi
 
 finish_exit

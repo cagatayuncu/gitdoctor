@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/cagatayuncu/gitdoctor/main/schema/gitflow.schema.json",
   "version": 1,
   "versionFiles": [
     {
@@ -11,5 +12,9 @@
     "enabled": true,
     "file": "CHANGELOG.md",
     "convention": "conventional-commits"
+  },
+  "homebrew": {
+    "tap": "cagatayuncu/homebrew-tap",
+    "formula": "Formula/gitdoctor.rb"
   }
 }
