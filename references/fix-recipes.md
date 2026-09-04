@@ -311,3 +311,19 @@ gh release create vX.Y.Z --verify-tag --generate-notes --title vX.Y.Z
 ```
 Repos that do not publish Releases set `release.githubRelease: false`
 (`--no-github-release`) and the check reports `skipped`.
+
+## homebrew-formula-stale
+Only when `homebrew.tap`/`homebrew.formula` are configured: the formula's `url`
+in the tap does not point at the latest tag's tarball. The release/hotfix
+finish does this as its `homebrew-formula` step (references/finish-release.md
+§ 7b) — resume it with `gitdoctor finish`, or by hand:
+```bash
+TAG=vX.Y.Z; TAP=<owner>/homebrew-tap; F=Formula/<name>.rb
+SHA=$(curl -sL "https://github.com/<owner>/<repo>/archive/refs/tags/$TAG.tar.gz" | sha256sum | cut -d' ' -f1)
+gh api -H "Accept: application/vnd.github.raw" "repos/$TAP/contents/$F" >formula.rb
+sed -i -e "s|/tags/v[0-9.]*\.tar\.gz|/tags/$TAG.tar.gz|" -e "s|sha256 \"[0-9a-f]*\"|sha256 \"$SHA\"|" formula.rb
+BLOB=$(gh api "repos/$TAP/contents/$F" --jq .sha)
+gh api -X PUT "repos/$TAP/contents/$F" -f message="chore: <name> X.Y.Z" -f sha="$BLOB" -f content="$(base64 -w0 formula.rb)"
+```
+(macOS: `shasum -a 256` and `base64` without `-w0`.) Then `brew update && brew
+upgrade <name>` on a Mac proves the sha.

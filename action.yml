@@ -1,7 +1,7 @@
 # Marketplace listing name (must be globally unique; the `uses:` path stays
 # cagatayuncu/gitdoctor regardless) and a <125-char description.
 name: "gitdoctor - Git Flow health gate"
-description: "Git Flow health gate: 46 read-only repo checks with fix recipes, a self-updating PR comment and SARIF."
+description: "Git Flow health gate: 47 read-only repo checks with fix recipes, a self-updating PR comment and SARIF."
 author: "Çağatay UNCU"
 branding:
   icon: "activity"
@@ -19,7 +19,7 @@ branding:
 
 inputs:
   checks:
-    description: "Comma-separated check ids to run (empty = all 46; see --list-checks)"
+    description: "Comma-separated check ids to run (empty = all 47; see --list-checks)"
     required: false
     default: ""
   skip:

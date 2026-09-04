@@ -46,6 +46,9 @@ the default path.
 
 ## Everything else
 
+The `homebrew-formula` step (finish-release.md § 7b) applies to hotfix tags
+too — a patch release ships through the tap like any other.
+
 Version bump, PR-vs-local main leg, tag placement (`mergeCommit.oid` in PR
 mode), atomic push in local mode, conflict policy, branch deletion rules,
 `gh release create` — identical to finish-release.md steps 1-8.

@@ -55,8 +55,9 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --format json [flags]
   file (pattern = POSIX ERE, capture group 1 is the version), plus
   `--changelog <changelog.file>` unless `changelog.enabled` is false (default:
   enabled, `CHANGELOG.md`), `--no-github-release` when `release.githubRelease`
-  is false, `--require-signed-tags` when `release.signedTags` is true. Config
-  schema: references/config.md. No config file → pass nothing, defaults apply.
+  is false, `--require-signed-tags` when `release.signedTags` is true,
+  `--homebrew-tap <homebrew.tap> --homebrew-formula <homebrew.formula>` when
+  the `homebrew` block exists. Config schema: references/config.md. No config file → pass nothing, defaults apply.
 - `--format json` is your contract. When the user wants to *see* the report,
   run it again with `--format text` (terminal) or `--format markdown` (PR
   descriptions, issues) and show that output verbatim instead of retyping
