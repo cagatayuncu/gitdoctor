@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-09-04)
 
 ### Features
 - Doctor output formats for people and pipelines: `--format text` (terminal),
@@ -30,6 +30,8 @@
   (hotfix back-merge routing, `multiple-release-branches`,
   `release-develop-drift`); `orphaned-release-branch` gives a local-only
   cleanup hint when origin already dropped the branch
+- bash 3.2 (macOS): empty `printf -v` left variables unset and `set -u`
+  aborted the doctor; caught by the new macOS CI leg
 
 ### Tests
 - Suite grown to 57 scenarios; CI matrix adds macOS (bash 3.2)
