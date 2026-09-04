@@ -19,6 +19,7 @@ few scalar keys for standalone runs — see § Config fallback).
   "release": { "maxConcurrent": 1, "allowPrerelease": false, "githubRelease": true, "signedTags": false },
   "backmerge": { "strategy": "merge-tag", "conflictPolicy": { "versionFiles": "higher", "changelog": "union" } },
   "github": { "defaultBranch": "develop" },
+  "homebrew": { "tap": "cagatayuncu/homebrew-tap", "formula": "Formula/gitdoctor.rb" },
   "doctor": { "staleDays": 30, "fetch": true, "scanDepth": 200,
               "ignoreBranches": ["dependabot/*", "renovate/*", "gh-pages"],
               "ignoreTags": [], "ignoreShas": [], "ignoreFindings": [] }
@@ -38,6 +39,7 @@ few scalar keys for standalone runs — see § Config fallback).
 | release.githubRelease: false | `--no-github-release` (gh-release-missing-for-tag reports `skipped`) |
 | release.signedTags: true | `--require-signed-tags` (enables tag-unsigned) |
 | changelog.enabled (default true) / changelog.file | `--changelog <file>` (enables changelog-tag-mismatch; omit when disabled) |
+| homebrew.tap / homebrew.formula | `--homebrew-tap owner/repo --homebrew-formula path` (enables homebrew-formula-stale + the finish probe step `homebrew-formula`) |
 | doctor.staleDays / scanDepth | `--stale-days` / `--scan-depth` |
 | doctor.fetch: false | `--no-fetch` |
 | doctor.ignoreBranches/Tags/Shas/Findings | `--ignore-branches` etc. (comma-joined) |
@@ -70,14 +72,19 @@ few scalar keys for standalone runs — see § Config fallback).
   [schema/gitflow.schema.json](../schema/gitflow.schema.json) for completion
   and validation. The doctor ignores it.
 - **github.defaultBranch**: what gh-default-branch-unexpected expects.
+- **homebrew**: optional; the tap repo (`owner/homebrew-tap`) and the formula
+  path inside it. With it, the doctor reports `homebrew-formula-stale` when the
+  formula's `url` lags the latest tag, and release/hotfix finishes bump the
+  formula as their `homebrew-formula` step (finish-release.md § 7b). Both keys
+  are required together.
 
 ## Config fallback (standalone doctor runs)
 
 Without the agent, the doctor scans these scalar keys itself (pure bash, any
 formatting, several keys per line): `"main"`,
 `"develop"`, `"tagPrefix"`, `"mergeMode"`, `"staleDays"`, `"maxConcurrent"`,
-`"githubRelease"`, `"signedTags"`, and the `"changelog"` block (`"enabled"`,
-`"file"`; a block without `file` means `CHANGELOG.md`). Constraint: each of
+`"githubRelease"`, `"signedTags"`, `"tap"`, `"formula"`, and the `"changelog"`
+block (`"enabled"`, `"file"`; a block without `file` means `CHANGELOG.md`). Constraint: each of
 those KEY NAMES must appear exactly once in the file (the schema above
 satisfies this — `main`/`develop` appear elsewhere only as values, never as
 keys). Everything else — version files, prefixes, ignore lists — is

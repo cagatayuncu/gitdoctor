@@ -19,7 +19,7 @@ branch-protection-aware PR/local merging.
 | Piece | Role |
 |---|---|
 | `SKILL.md` | Agent playbook: command routing, gates, dry-run contract, safety rails |
-| `scripts/gitflow-doctor.sh` | The only executable: 46 read-only checks + finish probes; JSON, text, Markdown, SARIF or baseline out |
+| `scripts/gitflow-doctor.sh` | The only executable: 47 read-only checks + finish probes; JSON, text, Markdown, SARIF or baseline out |
 | `references/*.md` | Choreographies (finish release/hotfix/feature, init/start), fix recipes, config schema |
 | `adapters/cursor/` | Cursor `/gitdoctor` command wrapper |
 | `tests/` | Fixture-based suite: every check has a scratch-repo test; probes and read-only guarantees included |
@@ -110,13 +110,13 @@ bash scripts/gitflow-doctor.sh --list-checks
 bash scripts/gitflow-doctor.sh --probe finish-release --branch release/1.2.0 --version 1.2.0
 ```
 
-Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. 46 checks across environment,
+Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. 47 checks across environment,
 worktree, local↔origin sync, git-flow topology (missing back-merge, wrong
 base, orphaned/colliding releases), tags (unpushed, sha-mismatch, duplicates,
 lightweight, unsigned), release bookkeeping (version files and changelog vs
 the latest tag), branch hygiene (stale/squash-merged), and GitHub (protection
 on main and develop, wrong-base PRs, squash-only limitations, tags without a
-Release). Every finding names what it is about (`key`), so
+Release), and distribution (a Homebrew tap formula lagging the latest tag). Every finding names what it is about (`key`), so
 `doctor.ignoreFindings` can silence one branch or tag instead of a whole check,
 and `--format baseline` writes those entries for you. Full catalog with
 recipes: [references/fix-recipes.md](references/fix-recipes.md).

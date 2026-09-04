@@ -142,10 +142,43 @@ gh reuses the existing annotated tag. Never let `gh release create` invent the
 tag (Releases API tags are lightweight). Skip if `release.githubRelease` is
 false or gh unavailable (report it as pending).
 
+## 7b. homebrew-formula (only when `homebrew` is configured)
+
+The probe adds a `homebrew-formula` step when `.gitflow.json` has
+`homebrew.tap` + `homebrew.formula` (flags `--homebrew-tap`,
+`--homebrew-formula`); `done` = the formula's `url` already points at
+`vX.Y.Z.tar.gz`. Run this AFTER the tag is pushed (step 4) — the tarball is
+served from the tag, and the sha must be computed from the real archive:
+
+```bash
+TAG=vX.Y.Z; TAP=<owner>/homebrew-tap; F=Formula/<name>.rb
+SHA=$(curl -sL "https://github.com/<owner>/<repo>/archive/refs/tags/$TAG.tar.gz" | sha256sum | cut -d' ' -f1)
+gh api -H "Accept: application/vnd.github.raw" "repos/$TAP/contents/$F" >"$TMP/formula.rb"
+# edit exactly two lines: url -> new tag, sha256 -> $SHA (keep everything else)
+BLOB=$(gh api "repos/$TAP/contents/$F" --jq .sha)
+gh api -X PUT "repos/$TAP/contents/$F" -f message="chore: <name> X.Y.Z" \
+  -f sha="$BLOB" -f content="$(base64 -w0 "$TMP/formula.rb")"
+```
+
+- Edit the two lines yourself (you are the editor): `url "...tags/vX.Y.Z.tar.gz"`
+  and `sha256 "<64 hex>"`. If `desc` quotes a check count, refresh it from
+  `--list-checks | wc -l`. Never touch `install`/`test` blocks.
+- `sha256sum` exists on Linux and Git Bash; macOS uses `shasum -a 256`.
+  `base64 -w0` is GNU; on macOS plain `base64` already emits one line.
+- The PUT is one commit on the tap's default branch — no clone. A 409/422
+  (protected branch) → create `bump/<name>-X.Y.Z` in the tap
+  (`gh api -X POST repos/$TAP/git/refs -f ref=refs/heads/bump/... -f sha=<default-branch sha>`),
+  PUT with `-f branch=bump/...`, then `gh pr create -R $TAP`.
+- `--dry-run`: the `gh api -X PUT/POST` and `gh pr create` calls print as
+  `DRY-RUN:`; the curl/sha and the raw GET run for real.
+- Re-probe: `homebrew-formula` must flip to `done:true` (the raw read is
+  eventually consistent; wait a few seconds before declaring it stuck).
+
 ## 8. Post-flight
 
-Re-run the probe: every step `done:true` (gh-release excepted when skipped).
-Then a quick doctor (`--checks missing-back-merge,orphaned-release-branch,tag-unpushed,sync-ahead`).
+Re-run the probe: every step `done:true` (gh-release excepted when skipped,
+homebrew-formula absent when not configured).
+Then a quick doctor (`--checks missing-back-merge,orphaned-release-branch,tag-unpushed,sync-ahead,homebrew-formula-stale`).
 Report: version, tag sha, PR links, release URL, back-merge status.
 
 ## Changelog

@@ -12,5 +12,9 @@
     "enabled": true,
     "file": "CHANGELOG.md",
     "convention": "conventional-commits"
+  },
+  "homebrew": {
+    "tap": "cagatayuncu/homebrew-tap",
+    "formula": "Formula/gitdoctor.rb"
   }
 }
