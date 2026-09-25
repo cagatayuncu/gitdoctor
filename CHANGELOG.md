@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 (2026-09-25)
+
+### Docs
+- README: a How to use guide (init, the feature loop, conventional commits,
+  what every command guarantees) and Release / Hotfix lifecycle sections
+  covering open and close, the finish probe steps, hotfix back-merge targets
+  and the abort / `--admin` / red-CI paths, with gitGraph diagrams
+
 ## 0.3.0 (2026-09-04)
 
 ### Features

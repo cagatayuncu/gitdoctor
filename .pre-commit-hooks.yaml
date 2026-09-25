@@ -3,7 +3,7 @@
 #
 #   repos:
 #     - repo: https://github.com/cagatayuncu/gitdoctor
-#       rev: v0.3.0
+#       rev: v0.3.1
 #       hooks:
 #         - id: gitdoctor-preflight
 #

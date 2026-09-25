@@ -26,7 +26,7 @@ one `uses:` line — copy `github-actions/gitdoctor-pr.yml` into your repo as
 `.github/workflows/gitdoctor-pr.yml`:
 
 ```yaml
-- uses: cagatayuncu/gitdoctor@v0.3.0
+- uses: cagatayuncu/gitdoctor@v0.3.1
   # inputs (optional): checks, skip, min-severity, comment, fail-on, github-token
 ```
 
@@ -63,7 +63,7 @@ Notes:
   ```yaml
   repos:
     - repo: https://github.com/cagatayuncu/gitdoctor
-      rev: v0.3.0
+      rev: v0.3.1
       hooks:
         - id: gitdoctor-preflight
   ```
