@@ -227,6 +227,28 @@
         }
       }
     },
+    "messages": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Commit/tag message templates. Placeholders: {branch} {tag} {version} {type} {main} {develop}.",
+      "properties": {
+        "mergeToMain": {
+          "type": "string",
+          "default": "Release {version}",
+          "description": "Merge commit (and PR title) into main."
+        },
+        "backMerge": {
+          "type": "string",
+          "default": "Back-merge release {version}",
+          "description": "Back-merge commit (and PR title) into develop or an open release."
+        },
+        "tag": {
+          "type": "string",
+          "default": "Release {version}",
+          "description": "Annotated tag message."
+        }
+      }
+    },
     "backmerge": {
       "type": "object",
       "additionalProperties": false,

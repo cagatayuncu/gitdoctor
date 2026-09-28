@@ -67,6 +67,7 @@ VERSION_SCHEME=""
 HOTFIX_PATTERN=""
 HOTFIX_INFIX=""
 MERGE_MODE="auto"
+CONVENTIONS=0
 PROBE=""
 PROBE_BRANCH=""
 PROBE_VERSION=""
@@ -108,6 +109,8 @@ usage: gitflow-doctor.sh [options]
                              homebrew-formula-stale check and the finish probe step)
   --assume-github owner/repo force GitHub mode even for non-github origin (tests)
   --probe finish-release|finish-hotfix|finish-feature --branch B [--version V]
+  --conventions              infer tag/message/back-merge conventions from the
+                             newest release/hotfix tags on main (JSON) and exit
 EOF
 }
 
@@ -152,6 +155,7 @@ while [ $# -gt 0 ]; do
     --version-scheme) VERSION_SCHEME=${2:?}; shift 2 ;;
     --hotfix-pattern) HOTFIX_PATTERN=${2:?}; shift 2 ;;
     --assume-github) ASSUME_GITHUB=${2:?}; shift 2 ;;
+    --conventions) CONVENTIONS=1; shift ;;
     --probe) PROBE=${2:?}; shift 2 ;;
     --branch) PROBE_BRANCH=${2:?}; shift 2 ;;
     --version) PROBE_VERSION=${2:?}; shift 2 ;;
@@ -1289,7 +1293,153 @@ run_probe() {
   exit 0
 }
 
+# ===========================================================================
+# CONVENTIONS MODE — infer the house style from the last finishes on main so
+# `init` can PROPOSE messages / tag settings (the agent writes nothing unasked)
+# ===========================================================================
+CONV_SAMPLE=5
+PRERELEASE_WORDS=" alpha beta rc pre preview dev snapshot canary next nightly "
+
+template_v() { # varname subject branch tag version -> placeholders substituted
+  local __tp_s=$2 __tp_b='{branch}' __tp_t='{tag}' __tp_v='{version}' __tp_d="into {develop}" __tp_m="into {main}"
+  [ -n "$3" ] && __tp_s=${__tp_s//"$3"/$__tp_b}
+  [ -n "$4" ] && __tp_s=${__tp_s//"$4"/$__tp_t}
+  [ -n "$5" ] && __tp_s=${__tp_s//"$5"/$__tp_v}
+  __tp_s=${__tp_s//"into $DEVELOP"/$__tp_d}
+  __tp_s=${__tp_s//"into $MAIN"/$__tp_m}
+  printf -v "$1" '%s' "$__tp_s"
+}
+
+majority_v() { # varname newline-list -> most frequent line (first seen wins ties)
+  local __mj_v=$1 __mj_a __mj_b __mj_n __mj_best="" __mj_bn=0
+  clear_v "$__mj_v"
+  while IFS= read -r __mj_a; do
+    [ -z "$__mj_a" ] && continue
+    __mj_n=0
+    while IFS= read -r __mj_b; do [ "$__mj_b" = "$__mj_a" ] && __mj_n=$((__mj_n + 1)); done <<<"$2"
+    [ "$__mj_n" -gt "$__mj_bn" ] && { __mj_best=$__mj_a; __mj_bn=$__mj_n; }
+  done <<<"$2"
+  [ -n "$__mj_best" ] && printf -v "$__mj_v" '%s' "$__mj_best"
+  return 0
+}
+
+run_conventions() {
+  local cands="" t v line sorted sampled="" n=0 total=0
+  # candidates: tags on main that look like [v]X.Y.Z[-...]
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    v=${t#v}
+    [[ $v =~ $SEMVER_RE ]] || continue
+    cands="$cands${cands:+$NL}$t"
+  done <<<"$MERGED_TAGS"
+  sort_by_version_v sorted "$cands" v
+  count_lines_v total "$sorted"
+  # the newest CONV_SAMPLE tags
+  local skip=$((total - CONV_SAMPLE)) i=0
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    i=$((i + 1)); [ "$i" -le "$skip" ] && continue
+    sampled="$sampled${sampled:+$NL}$t"; n=$((n + 1))
+  done <<<"$sorted"
+
+  # tag prefix / type / message votes
+  local subj_lines="" pfx_votes="" type_votes="" tagmsg_votes="" tl typ tsub tmpl targets="" rest
+  capture_all subj_lines git for-each-ref --format='%(refname:short)%09%(objecttype)%09%(contents:subject)' refs/tags
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    case "$t" in v[0-9]*) pfx_votes="$pfx_votes${pfx_votes:+$NL}v" ;; *) pfx_votes="$pfx_votes${pfx_votes:+$NL}none" ;; esac
+    tl=""; lookup_line tl "$TAG_LINES" "$t" || :
+    typ=${tl##* }
+    case "$typ" in tag) type_votes="$type_votes${type_votes:+$NL}annotated" ;; *) type_votes="$type_votes${type_votes:+$NL}lightweight" ;; esac
+    rest=${tl#* }; targets="$targets ${rest%% *}"
+    if [ "$typ" = tag ]; then
+      while IFS= read -r line; do
+        case "$line" in "$t"$'\t'*) : ;; *) continue ;; esac
+        tsub=${line#*$'\t'}; tsub=${tsub#*$'\t'}
+        template_v tmpl "$tsub" "" "$t" "${t#v}"
+        tagmsg_votes="$tagmsg_votes${tagmsg_votes:+$NL}$tmpl"
+        break
+      done <<<"$subj_lines"
+    fi
+  done <<<"$sampled"
+
+  # main merges at the tag targets, and develop merges that took them back
+  local main_info="" dev_merges="" main_votes="" bm_votes="" strat_votes=""
+  if [ -n "${targets// /}" ]; then
+    # shellcheck disable=SC2086 # targets are shas, split on purpose
+    capture_all main_info git log --no-walk=unsorted --format='%H %P%x09%s' $targets
+  fi
+  [ -n "$R_DEV" ] && capture_all dev_merges git log --first-parent --merges -n "$SCAN_DEPTH" --format='%H %P%x09%s' "$R_DEV"
+  local m p1 p2 msub br ver dline dp2 dsub
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    tl=""; lookup_line tl "$TAG_LINES" "$t" || :
+    rest=${tl#* }; m=${rest%% *}
+    ver=${t#v}
+    line=""
+    while IFS= read -r line; do case "$line" in "$m "*) break ;; esac; line=""; done <<<"$main_info"
+    [ -z "$line" ] && continue
+    msub=${line#*$'\t'}; line=${line%%$'\t'*}
+    # shellcheck disable=SC2086 # shas split on purpose
+    set -- $line
+    [ $# -ge 3 ] || continue # the tag target is not a merge commit
+    p2=$3
+    br=""
+    case "$msub" in
+      *"$HOTFIX_PREFIX$ver"*) br="$HOTFIX_PREFIX$ver" ;;
+      *"$RELEASE_PREFIX$ver"*) br="$RELEASE_PREFIX$ver" ;;
+    esac
+    template_v tmpl "$msub" "$br" "$t" "$ver"
+    main_votes="$main_votes${main_votes:+$NL}$tmpl"
+    while IFS= read -r dline; do
+      [ -z "$dline" ] && continue
+      dsub=${dline#*$'\t'}; dline=${dline%%$'\t'*}
+      # shellcheck disable=SC2086 # shas split on purpose
+      set -- $dline
+      [ $# -ge 3 ] || continue
+      dp2=$3
+      if [ "$dp2" = "$m" ]; then strat_votes="$strat_votes${strat_votes:+$NL}merge-tag"
+      elif [ "$dp2" = "$p2" ]; then strat_votes="$strat_votes${strat_votes:+$NL}merge-branch"
+      else continue; fi
+      template_v tmpl "$dsub" "$br" "$t" "$ver"
+      bm_votes="$bm_votes${bm_votes:+$NL}$tmpl"
+      break
+    done <<<"$dev_merges"
+  done <<<"$sampled"
+
+  # version scheme: a non-prerelease word used as X.Y.Z-<word>.N at least twice
+  local words="" w scheme_json='{"scheme":"semver"}' wbest=""
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    v=${t#v}
+    [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+-([A-Za-z]+)\.[0-9]+$ ]] || continue
+    w=${BASH_REMATCH[1]}
+    case "$PRERELEASE_WORDS" in *" $w "*) continue ;; esac
+    words="$words${words:+$NL}$w"
+  done <<<"$sorted"
+  majority_v wbest "$words"
+  if [ -n "$wbest" ]; then
+    local wn=0; while IFS= read -r w; do [ "$w" = "$wbest" ] && wn=$((wn + 1)); done <<<"$words"
+    [ "$wn" -ge 2 ] && scheme_json="{\"scheme\":\"suffix-counter\",\"hotfixPattern\":\"{base}-$wbest.{n}\"}"
+  fi
+
+  local out="" best j msgs=""
+  json_str_v j "$MAIN"; out="\"main\":\"$j\",\"sampled\":$n"
+  majority_v best "$pfx_votes"
+  case "$best" in v) out="$out,\"tagPrefix\":\"v\"" ;; none) out="$out,\"tagPrefix\":\"\"" ;; esac
+  majority_v best "$type_votes"; [ -n "$best" ] && out="$out,\"tagType\":\"$best\""
+  majority_v best "$main_votes"; [ -n "$best" ] && { json_str_v j "$best"; msgs="\"mergeToMain\":\"$j\""; }
+  majority_v best "$bm_votes"; [ -n "$best" ] && { json_str_v j "$best"; msgs="$msgs${msgs:+,}\"backMerge\":\"$j\""; }
+  majority_v best "$tagmsg_votes"; [ -n "$best" ] && { json_str_v j "$best"; msgs="$msgs${msgs:+,}\"tag\":\"$j\""; }
+  out="$out,\"messages\":{$msgs}"
+  majority_v best "$strat_votes"; [ -n "$best" ] && out="$out,\"backmergeStrategy\":\"$best\""
+  out="$out,\"versionScheme\":$scheme_json"
+  printf '{"gitflowDoctor":"%s","conventions":{%s}}\n' "$DOCTOR_VERSION" "$out"
+  exit 0
+}
+
 [ -n "$PROBE" ] && run_probe
+[ "$CONVENTIONS" = 1 ] && run_conventions
 
 # ===========================================================================
 # CHECKS

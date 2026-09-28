@@ -17,6 +17,15 @@ Prepares a repo for git flow. Idempotent — re-running fixes what is missing.
    (editor completion): detect version files — `package.json`, `*.csproj` with
    `<Version>`, `pyproject.toml`, `Cargo.toml`, `VERSION` — and write explicit
    `versionFiles` entries with presets.
+   **Existing history → infer, then propose.** Run
+   `bash <skill-dir>/scripts/gitflow-doctor.sh --conventions [--main <b>]`: it
+   reads the newest 5 release/hotfix tags on main and reports `tagPrefix`,
+   `tagType`, `messages` (`mergeToMain`, `backMerge`, `tag` as templates),
+   `backmergeStrategy` and `versionScheme`, each by majority vote. Show them
+   to the user as a proposed config block and write only what they accept.
+   Keys missing from the output had no evidence — leave them at defaults.
+   A `tagType` of `lightweight` is reported, not copied: recommend annotated
+   tags going forward (doctor: tag-lightweight-release).
 4. Append to `.gitattributes` (create if missing): `CHANGELOG.md merge=union`
    (use the configured changelog filename).
 5. If no semver tag exists, offer an initial `v0.1.0` (or user's choice) on

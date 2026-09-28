@@ -18,6 +18,7 @@ few scalar keys for standalone runs — see § Config fallback).
   "changelog": { "enabled": true, "file": "CHANGELOG.md", "convention": "conventional-commits" },
   "release": { "maxConcurrent": 1, "allowPrerelease": false, "githubRelease": true, "signedTags": false },
   "versionScheme": { "scheme": "semver", "hotfixPattern": "{base}-hotfix.{n}" },
+  "messages": { "mergeToMain": "Release {version}", "backMerge": "Back-merge release {version}", "tag": "Release {version}" },
   "backmerge": { "strategy": "merge-tag", "conflictPolicy": { "versionFiles": "higher", "changelog": "union" } },
   "github": { "defaultBranch": "develop" },
   "homebrew": { "tap": "cagatayuncu/homebrew-tap", "formula": "Formula/gitdoctor.rb" },
@@ -72,6 +73,17 @@ few scalar keys for standalone runs — see § Config fallback).
     `2.0.0-hotfix.12` < `2.0.1`. Branch names `hotfix/2.0.0-hotfix.12` are
     valid without `allowPrerelease`, and the next hotfix is the same base with
     counter + 1. Pair it with `"tagPrefix": ""` when tags carry no `v`.
+- **messages**: agent-side (no doctor flag). Templates for the merge commit
+  into main (`mergeToMain`), the back-merge commit (`backMerge`) and the
+  annotated tag message (`tag`). Placeholders: `{branch}` (`release/1.2.0`),
+  `{tag}` (`v1.2.0`), `{version}` (`1.2.0`), `{type}` (`release`|`hotfix`),
+  `{main}`, `{develop}`. Defaults (shown above) are gitdoctor's historic
+  messages; a hotfix uses the same templates with `{type}` = `hotfix` (the
+  defaults say "Release" for both, as before). A team that keeps git's own
+  wording sets e.g. `"mergeToMain": "Merge branch '{branch}'"`,
+  `"backMerge": "Merge branch '{branch}' into {develop}"`, `"tag": "{tag}"`.
+  PR titles in PR mode use `mergeToMain` / `backMerge` too. `init` proposes
+  these from history (`--conventions`, start-and-init.md § Init).
 - **backmerge.strategy**: `merge-tag` (default; guarantees main ⊂ develop) or
   `merge-branch` (nvie-literal: merge the release branch itself).
 - **backmerge.conflictPolicy**: `versionFiles: "higher"` keeps the greater

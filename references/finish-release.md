@@ -13,12 +13,26 @@ the probe walk — safe to re-run after any interruption.
    bash <skill-dir>/scripts/gitflow-doctor.sh --probe finish-release \
      --branch release/X.Y.Z --version X.Y.Z [config flags incl. --version-file/--version-pattern]
    ```
-   Any probe `warnings` (tag divergence) → STOP, show the user, do not retag.
+   Any probe `warnings` about tag divergence → STOP, show the user, do not retag.
+   **Conflict forecast**: the probe's `forecast` lists the paths each PENDING
+   leg would conflict on (`main`, `backMerge`; feature probes: `develop`).
+   Show a non-empty forecast to the user BEFORE any merge. Recommended fix
+   (fix-recipes.md#flow-branch-behind-main): merge main into the branch and
+   let the branch's author resolve there, then re-run finish — the legs then
+   merge clean. Continue into a forecast conflict only on the user's say-so.
+   A probe warning that a LOWER hotfix is still open is informational: tell
+   the user, proceed if they want this one first.
 3. Resolve merge mode for main and for develop separately (SKILL.md
    § Merge-mode resolution).
 4. `finish --abort` is only legal while `merged-to-main` is still false:
    close the PR if one was opened (`gh pr close <n>`), keep the branch, done.
    After merged-to-main, the only way out is forward — resume.
+
+5. Render the message templates once (references/config.md § messages;
+   defaults `Release {version}` / `Back-merge release {version}` /
+   `Release {version}`): `{branch}` = `release/X.Y.Z`, `{tag}` = `vX.Y.Z`,
+   `{version}` = `X.Y.Z`, `{type}` = `release`. Every `<messages.*>` below is
+   the rendered string.
 
 Walk the steps below in order; SKIP any step the probe reports `done:true`.
 Re-probe after each mutation.
@@ -39,14 +53,14 @@ If version files are configured and not at X.Y.Z on the branch:
 ```bash
 git switch main
 git merge --ff-only origin/main
-git merge --no-ff release/X.Y.Z -m "Release X.Y.Z"
+git merge --no-ff release/X.Y.Z -m "<messages.mergeToMain>"
 ```
 Do NOT push yet — step 3+4 push main and the tag atomically.
 
 **PR mode** (main protected):
 1. Reuse or create the PR:
    `gh pr list --head release/X.Y.Z --base main --state open --json number`
-   → else `gh pr create --base main --head release/X.Y.Z --title "Release X.Y.Z" --body "<changelog section>"`
+   → else `gh pr create --base main --head release/X.Y.Z --title "<messages.mergeToMain>" --body "<changelog section>"`
 2. `gh pr checks <n> --watch --fail-fast` — on red: report the failing
    checks and stop (offer `gh pr merge <n> --auto` only if the user wants
    merge-on-green; the finish stays resumable either way).
@@ -55,7 +69,7 @@ Do NOT push yet — step 3+4 push main and the tag atomically.
 
 ## 3. tag-exists
 
-**Local mode**: `git tag -a vX.Y.Z -m "Release X.Y.Z"` on the merge commit
+**Local mode**: `git tag -a vX.Y.Z -m "<messages.tag>"` on the merge commit
 (HEAD of main after step 2).
 
 **PR mode**: never tag a local sha — the merge happened on GitHub:
@@ -63,7 +77,7 @@ Do NOT push yet — step 3+4 push main and the tag atomically.
 SHA=$(gh pr view <n> --json mergeCommit --jq .mergeCommit.oid)
 git fetch origin main
 git merge-base --is-ancestor "$SHA" origin/main   # verify before tagging
-git tag -a vX.Y.Z "$SHA" -m "Release X.Y.Z"
+git tag -a vX.Y.Z "$SHA" -m "<messages.tag>"
 ```
 `mergeCommit.oid` is populated for all three merge methods (merge → merge
 commit, squash → squash commit, rebase → last rebased commit).
@@ -88,21 +102,23 @@ Develop unprotected:
 ```bash
 git switch develop
 git merge --ff-only origin/develop
-git merge --no-ff vX.Y.Z -m "Back-merge release X.Y.Z"
+git merge --no-ff vX.Y.Z -m "<messages.backMerge>"
 git push origin develop
 ```
 Develop protected: carrier branch + PR:
 ```bash
 git switch -c backmerge/release-X.Y.Z vX.Y.Z
 git push -u origin backmerge/release-X.Y.Z
-gh pr create --base develop --head backmerge/release-X.Y.Z --title "Back-merge release X.Y.Z" --fill
+gh pr create --base develop --head backmerge/release-X.Y.Z --title "<messages.backMerge>" --fill
 # checks → merge with the MERGE method if allowed; squash-only repos: see below
 # after merge: delete the carrier branch (--delete-branch)
 ```
 
 ### Back-merge conflicts
 
-Predict first: `git merge-tree --write-tree --name-only origin/develop vX.Y.Z`
+Predict first: the probe's `forecast.backMerge` (before the tag exists it
+stands the branch in for the tag); once tagged, re-check with
+`git merge-tree --write-tree --name-only origin/develop vX.Y.Z`
 (exit 1 = conflicts; lines after the tree oid = paths). Tell the user before
 merging. On conflict, resolve by file class:
 - **Version files** (paths in `versionFiles`): policy `higher` — compare

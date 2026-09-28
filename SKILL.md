@@ -63,7 +63,8 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --format json [flags]
   run it again with `--format text` (terminal) or `--format markdown` (PR
   descriptions, issues) and show that output verbatim instead of retyping
   findings. `--format sarif` feeds code scanning; `--format baseline` feeds the
-  Baseline flow. `--list-checks` prints every id; `--explain <id>` a recipe.
+  Baseline flow. `--list-checks` prints every id; `--explain <id>` a recipe;
+  `--conventions` infers tag/message/back-merge style from history (init).
   Probes always emit JSON.
 - Exit codes: 0 clean/info, 1 warnings, 2 criticals, 4 usage error.
 - Findings carry `fix.commands` and `fix.recipeRef` into
