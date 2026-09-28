@@ -19,7 +19,7 @@ branch-protection-aware PR/local merging.
 | Piece | Role |
 |---|---|
 | `SKILL.md` | Agent playbook: command routing, gates, dry-run contract, safety rails |
-| `scripts/gitflow-doctor.sh` | The only executable: 51 read-only checks, finish probes with conflict forecasts, convention inference, merge-resolution evidence and a multi-repo workspace view; JSON, text, Markdown, SARIF or baseline out |
+| `scripts/gitflow-doctor.sh` | The only executable: 52 read-only checks, finish probes with conflict forecasts, convention inference, merge-resolution evidence and a multi-repo workspace view; JSON, text, Markdown, SARIF or baseline out |
 | `references/*.md` | Choreographies (finish release/hotfix/feature, init/start, workspace), fix recipes, config reference |
 | `schema/` | JSON Schemas for `.gitflow.json` and `.gitflow-workspace.json` |
 | `adapters/cursor/` | Cursor `/gitdoctor` command wrapper |
@@ -247,6 +247,14 @@ finishes build or test the merged main before tagging and the merged develop
 before pushing; a failure stops before anything is published ([Your
 conventions](#your-conventions)).
 
+**Nobody pushes behind its back.** Right before every push the agent runs
+`--push-guard`: one `ls-remote` compares origin now with origin at the last
+fetch. If another tool or a teammate pushed commits this finish does not
+have, it stops instead of pushing. While a finish runs it keeps a
+`.git/gitflow/finish.lock` with the shas it pushed itself, so
+`external-push-detected` can name any other update (a GUI "finish" from the
+same clone, or a teammate's push picked up by a fetch).
+
 **When it doesn't go straight through**
 
 - **Red CI on the PR:** finish stops and names the failing checks (it can
@@ -414,10 +422,11 @@ bash scripts/gitflow-doctor.sh --list-checks
 bash scripts/gitflow-doctor.sh --probe finish-release --branch release/1.2.0 --version 1.2.0
 bash scripts/gitflow-doctor.sh --conventions                    # tag/message/back-merge style from history
 bash scripts/gitflow-doctor.sh --merge-proof                    # during a conflicted merge: evidence per file
+bash scripts/gitflow-doctor.sh --push-guard main,develop       # right before a push: did origin move? (exit 1 = stop)
 bash scripts/gitflow-doctor.sh --workspace ws.json --tag 2.0.0  # several repos at once
 ```
 
-Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. 51 checks across environment,
+Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. 52 checks across environment,
 worktree, local↔origin sync, git-flow topology (missing back-merge, wrong
 base, orphaned/colliding releases and hotfixes, branches main has moved past,
 several open hotfixes), tags (unpushed, sha-mismatch, duplicates,

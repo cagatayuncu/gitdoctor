@@ -34,8 +34,13 @@ the probe walk — safe to re-run after any interruption.
    `{version}` = `X.Y.Z`, `{type}` = `release`. Every `<messages.*>` below is
    the rendered string.
 
+6. Open the finish lock (§ Push guard and finish.lock) before the first
+   mutation, unless one for this branch already exists (a resumed finish keeps
+   its lock).
+
 Walk the steps below in order; SKIP any step the probe reports `done:true`.
-Re-probe after each mutation.
+Re-probe after each mutation. Every `git push` below is preceded by the push
+guard and followed by an `own=` line in the lock.
 
 ## 1. version-bumped
 
@@ -94,12 +99,65 @@ git push --atomic origin main refs/tags/vX.Y.Z
 ```
 **PR mode** (main already on GitHub): `git push origin vX.Y.Z`
 
-A push from somewhere else in the meantime (a GUI "finish", a teammate) is
-safe to meet: if origin already has exactly these commits the push is a no-op
-and the re-probe shows the step done; if origin moved to OTHER commits, git
-rejects the non-fast-forward push — stop, re-probe, never `--force`. Finish
-from one tool in one session; do not split a finish between a GUI and this
-flow (a half-done GUI finish is what the probe walk exists to repair).
+Run the push guard first (§ Push guard and finish.lock). A push from
+somewhere else in the meantime (a GUI "finish", a teammate) then shows up
+before you push, not after.
+
+## Push guard and finish.lock
+
+Two read-only aids against a push that lands from another tool, terminal or
+machine while this finish runs. Git already rejects a non-fast-forward push;
+these make the user hear about it, and catch the case where the other push
+carried commits nobody verified.
+
+**finish.lock** — `$(git rev-parse --git-path gitflow/finish.lock)`, plain
+`key=value` lines, written by you (the doctor only reads it):
+```text
+branch=release/X.Y.Z
+started=<unix seconds when this finish began>
+own=<sha>        # one line per sha this finish put on origin
+```
+- Create it at the gate (step 0.6): `mkdir -p` its directory, write `branch=`
+  and `started=$(date +%s)`.
+- After every push append `own=<the pushed sha>` (the main merge, the
+  back-merged develop, the version-bump commit on the branch). In PR mode a
+  merge happens on GitHub: append `own=<mergeCommit.oid>` right after
+  `gh pr merge`, for the release PR and the back-merge PR alike.
+- Delete it at post-flight (step 8), and on `finish --abort`.
+
+With a lock in place, `external-push-detected` (doctor) and the probe's
+`externalUpdates` list every update of `origin/<main|develop|branch>` since
+`started` that is not an `own=` sha: a GUI push from this clone (`via:push`)
+or a teammate's push seen by a fetch (`via:fetch`). A probe warning that the
+lock names ANOTHER branch means two finishes at once — stop and ask.
+
+**Push guard** — immediately before every `git push`, for exactly the
+branches that push will update (`--push-guard main` before the atomic main +
+tag push, `--push-guard develop` before the back-merge push); in PR mode
+before `gh pr merge`, for the PR's base and head
+(`--push-guard main,release/X.Y.Z`):
+```bash
+bash <skill-dir>/scripts/gitflow-doctor.sh --push-guard main,develop
+```
+It never fetches: `tracking` is origin as of the last fetch, `remote` is
+origin now (one `ls-remote`), `local` is your tip. Per branch:
+- `clean` → push. `moved-ancestor` → push, and tell the user someone pushed
+  part of this work already. `new-branch` → push.
+- `already-pushed` → skip this push (nothing left to send); if
+  `movedSinceFetch` is true, tell the user another tool pushed it, append
+  `own=` for it, re-probe.
+- `moved`, `not-fast-forward`, `deleted`, `no-local-branch`,
+  `unknown-branch` (`safe:false`, exit 1) → STOP. Do not push, never
+  `--force`. Show the user what origin has (`git fetch origin && git log
+  --oneline <local>..origin/<b>`), re-probe, and continue only on their
+  decision.
+- `rewound` → STOP: origin went back to an older commit, so someone removed
+  commits on purpose; pushing now would put them back. Ask the user.
+- `"error":"git ls-remote origin failed"` (network, auth) → nothing is
+  known; do not push until the guard runs clean.
+
+Finish from one tool in one session; do not split a finish between a GUI and
+this flow (a half-done GUI finish is what the probe walk exists to repair).
 
 ## Verify (local-mode legs, when `verify` is configured)
 
@@ -138,6 +196,7 @@ git switch develop
 git merge --ff-only origin/develop
 git merge --no-ff vX.Y.Z -m "<messages.backMerge>"
 # verify.develop configured → § Verify here, before the push
+# § Push guard: --push-guard develop must be safe
 git push origin develop
 ```
 Develop protected: carrier branch + PR:
@@ -251,7 +310,9 @@ gh api -X PUT "repos/$TAP/contents/$F" -f message="chore: <name> X.Y.Z" \
 
 Re-run the probe: every step `done:true` (gh-release excepted when skipped,
 homebrew-formula absent when not configured).
-Then a quick doctor (`--checks missing-back-merge,orphaned-release-branch,tag-unpushed,sync-ahead,homebrew-formula-stale`).
+Then a quick doctor (`--checks missing-back-merge,orphaned-release-branch,tag-unpushed,sync-ahead,homebrew-formula-stale,external-push-detected`)
+while the lock still exists; report any `external-push-detected` update to the
+user, then delete `finish.lock`.
 Report: version, tag sha, PR links, release URL, back-merge status.
 
 ## Changelog

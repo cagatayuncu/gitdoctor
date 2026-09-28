@@ -63,7 +63,10 @@ is missing, any repo has a critical finding, or the tag drifts. Findings:
 4. **Gate**: `all-verified` → continue only when every non-skipped repo passed
    step 3. Otherwise report the table and stop; nothing has been published.
 5. **Push**, repo by repo (atomic main + tag inside each repo), then the
-   back-merge pushes, then the GitHub Releases.
+   back-merge pushes, then the GitHub Releases. Before the first push, run
+   `--push-guard <main>,<develop>` in EVERY repo; one `safe:false` → push
+   nowhere, report the table and stop (each repo keeps its own finish.lock:
+   finish-release.md § Push guard and finish.lock).
 6. **Consistency**: re-run with `--tag <tag>`; `tag-convention-drift` must be
    absent (same tag type, same message pattern, on main's tip everywhere).
 7. **Branch deletion** per repo (the usual ancestry-verified rules).

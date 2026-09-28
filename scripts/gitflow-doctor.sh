@@ -69,6 +69,7 @@ HOTFIX_INFIX=""
 MERGE_MODE="auto"
 CONVENTIONS=0
 MERGE_PROOF=0
+PUSH_GUARD=""
 WORKSPACE=""
 WS_TAG=""
 WS_POLICY=""
@@ -118,6 +119,8 @@ usage: gitflow-doctor.sh [options]
                              newest release/hotfix tags on main (JSON) and exit
   --merge-proof              during a conflicted merge: evidence per conflicted file
                              that the staged resolution keeps both sides (JSON) and exit
+  --push-guard B[,B...]      right before a push: has origin moved since the last fetch?
+                             per-branch verdict from one ls-remote (JSON; exit 1 = unsafe)
   --workspace FILE [--branch B] [--tag T]
                              several repos in lockstep (.gitflow-workspace.json): per-repo
                              doctor summary, finish probe for B, tag consistency for T
@@ -167,6 +170,7 @@ while [ $# -gt 0 ]; do
     --assume-github) ASSUME_GITHUB=${2:?}; shift 2 ;;
     --conventions) CONVENTIONS=1; shift ;;
     --merge-proof) MERGE_PROOF=1; shift ;;
+    --push-guard) PUSH_GUARD=${2:?}; shift 2 ;;
     --workspace) WORKSPACE=${2:?}; shift 2 ;;
     --tag) WS_TAG=${2:?}; shift 2 ;;
     --probe) PROBE=${2:?}; shift 2 ;;
@@ -183,7 +187,7 @@ case "$VERSION_SCHEME" in ''|semver|suffix-counter) : ;; *) die_usage "--version
 # ---------------------------------------------------------------------------
 # Check catalog (the authoritative id list; README/action counts derive from it)
 # ---------------------------------------------------------------------------
-ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift flow-branch-behind-main multiple-release-branches multiple-hotfix-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale tag-convention-drift workspace-repo-missing"
+ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress external-push-detected sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift flow-branch-behind-main multiple-release-branches multiple-hotfix-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale tag-convention-drift workspace-repo-missing"
 RECIPES_URL="https://github.com/cagatayuncu/gitdoctor/blob/main/references/fix-recipes.md"
 
 known_check_id() { case " $ALL_CHECK_IDS " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -832,6 +836,65 @@ LS_REMOTE_OK=1
 if [ "$OFFLINE" = 1 ] && ! remote_is_local; then LS_REMOTE_OK=0; fi
 [ -z "$ORIGIN_URL" ] && LS_REMOTE_OK=0
 
+# ---------------------------------------------------------------------------
+# PUSH GUARD — run right before a push. Compares, per branch, the local tip,
+# the remote-tracking ref (origin as of the last fetch) and origin right now
+# (one ls-remote). Runs before the fetch on purpose: the tracking ref is the
+# "before" picture. Exit 0 = every push is safe, 1 = stop and re-probe.
+# ---------------------------------------------------------------------------
+LSR_OK="#ls-remote-ok"
+ls_remote_marked() { git ls-remote origin "$@" && printf '%s\n' "$LSR_OK"; }
+run_push_guard() {
+  [ "$LS_REMOTE_OK" = 1 ] || { echo "gitflow-doctor: --push-guard needs origin (and no --offline)" >&2; exit 4; }
+  local list=${PUSH_GUARD//,/$NL} b pats="" hpats="" lines="" rem="" line name sha l t r v moved safe=true rows="" jb
+  while IFS= read -r b; do
+    [ -z "$b" ] && continue
+    pats="$pats refs/heads/$b refs/remotes/origin/$b"; hpats="$hpats refs/heads/$b"
+  done <<<"$list"
+  [ -n "$hpats" ] || die_usage "--push-guard needs at least one branch"
+  # shellcheck disable=SC2086 # ref patterns, split on purpose
+  capture_all lines git for-each-ref --format='%(refname) %(objectname)' $pats
+  # shellcheck disable=SC2086
+  capture_all rem ls_remote_marked $hpats
+  # no marker line = ls-remote failed (network, auth): nothing is known, nothing is safe
+  case "$rem" in
+    "$LSR_OK"|*"$NL$LSR_OK") rem=${rem%"$LSR_OK"} ;;
+    *) printf '{"gitflowDoctor":"%s","pushGuard":{"safe":false,"error":"git ls-remote origin failed","branches":[]}}\n' "$DOCTOR_VERSION"
+       exit 1 ;;
+  esac
+  while IFS= read -r b; do
+    [ -z "$b" ] && continue
+    l=""; t=""; r=""
+    while IFS= read -r line; do
+      name=${line% *}; sha=${line##* }
+      case "$name" in "refs/heads/$b") l=$sha ;; "refs/remotes/origin/$b") t=$sha ;; esac
+    done <<<"$lines"
+    while IFS= read -r line; do
+      [ "${line#*$'\t'}" = "refs/heads/$b" ] && r=${line%%$'\t'*}
+    done <<<"$rem"
+    moved=false; [ "$r" != "$t" ] && moved=true
+    if [ -z "$l$t$r" ]; then v=unknown-branch; safe=false
+    elif [ -n "$r" ] && [ "$r" = "$l" ]; then v=already-pushed
+    elif [ -z "$r" ] && [ -z "$t" ]; then v=new-branch
+    elif [ -z "$r" ]; then v=deleted; safe=false
+    elif [ -z "$l" ]; then v=no-local-branch; safe=false
+    # origin went BACK (someone removed commits on purpose): our push would restore them
+    elif [ "$moved" = true ] && [ -n "$t" ] && git merge-base --is-ancestor "$r" "$t" 2>/dev/null; then
+      v=rewound; safe=false
+    elif git merge-base --is-ancestor "$r" "$l" 2>/dev/null; then
+      v=clean; [ "$moved" = true ] && v=moved-ancestor
+    elif [ "$moved" = true ]; then v=moved; safe=false
+    else v=not-fast-forward; safe=false
+    fi
+    json_str_v jb "$b"
+    rows="$rows${rows:+,}{\"branch\":\"$jb\",\"local\":\"$l\",\"tracking\":\"$t\",\"remote\":\"$r\",\"movedSinceFetch\":$moved,\"verdict\":\"$v\"}"
+  done <<<"$list"
+  printf '{"gitflowDoctor":"%s","pushGuard":{"safe":%s,"branches":[%s]}}\n' "$DOCTOR_VERSION" "$safe" "$rows"
+  [ "$safe" = true ] && exit 0
+  exit 1
+}
+[ -n "$PUSH_GUARD" ] && run_push_guard
+
 GH_MODE=0
 GH_STATE="off"
 if [ "$OFFLINE" = 1 ]; then GH_STATE="offline"
@@ -1241,6 +1304,52 @@ add_probe_warning() {
   PROBE_WARNINGS="$PROBE_WARNINGS${PROBE_WARNINGS:+,}\"$jw\""
 }
 
+# finish.lock (written by the agent, read here): which finish is running,
+# since when, and every sha it put on origin itself (own=). Any other update
+# of origin/<main|develop|branch> in the reflog since then came from another
+# tool, terminal or machine. The lock is a hint; the probe stays the truth.
+EXT_LOCK=0; EXT_BRANCH=""; EXT_STARTED=0; EXT_N=0; EXT_ROWS=""; EXT_NOLOG=0
+scan_external_pushes() {
+  local __ep_cfg="" __ep_path="" __ep_l __ep_own=" " __ep_refs="" __ep_b __ep_log="" __ep_sel __ep_rest __ep_sha __ep_msg __ep_ref __ep_t __ep_jr __ep_via
+  EXT_LOCK=0; EXT_BRANCH=""; EXT_STARTED=0; EXT_N=0; EXT_ROWS=""; EXT_NOLOG=0
+  capture __ep_path git rev-parse --git-path gitflow/finish.lock
+  [ -n "$__ep_path" ] && [ -f "$__ep_path" ] || return 0
+  EXT_LOCK=1
+  while IFS= read -r __ep_l || [ -n "$__ep_l" ]; do
+    __ep_l=${__ep_l%$'\r'}
+    case "$__ep_l" in
+      branch=*) EXT_BRANCH=${__ep_l#branch=} ;;
+      started=*) EXT_STARTED=${__ep_l#started=} ;;
+      own=*) __ep_own="$__ep_own${__ep_l#own=} " ;;
+    esac
+  done <"$__ep_path"
+  [[ $EXT_STARTED =~ ^[0-9]+$ ]] || EXT_STARTED=0
+  # remote-tracking reflogs are what this reads; with them switched off it sees nothing
+  capture __ep_cfg git config --get core.logAllRefUpdates
+  case "$__ep_cfg" in false|no|off|0) EXT_NOLOG=1; return 0 ;; esac
+  for __ep_b in "$MAIN" "$DEVELOP" "$EXT_BRANCH"; do
+    case " $__ep_refs " in *" refs/remotes/origin/$__ep_b "*) continue ;; esac
+    [ -n "$__ep_b" ] && remote_branch_exists "$__ep_b" && __ep_refs="$__ep_refs refs/remotes/origin/$__ep_b"
+  done
+  [ -n "$__ep_refs" ] || return 0
+  # shellcheck disable=SC2086 # ref list, split on purpose
+  capture_all __ep_log git log -g --date=unix --format='%gD%x09%H%x09%gs' $__ep_refs
+  while IFS= read -r __ep_l; do
+    [ -z "$__ep_l" ] && continue
+    __ep_sel=${__ep_l%%$'\t'*}; __ep_rest=${__ep_l#*$'\t'}
+    __ep_sha=${__ep_rest%%$'\t'*}; __ep_msg=${__ep_rest#*$'\t'}
+    __ep_ref=${__ep_sel%@\{*}; __ep_ref=${__ep_ref#refs/remotes/origin/}
+    __ep_t=${__ep_sel##*@\{}; __ep_t=${__ep_t%\}}
+    [[ $__ep_t =~ ^[0-9]+$ ]] || continue
+    [ "$__ep_t" -ge "$EXT_STARTED" ] || continue
+    case "$__ep_own" in *" $__ep_sha "*) continue ;; esac
+    case "$__ep_msg" in "update by push"*) __ep_via=push ;; fetch*|pull*) __ep_via=fetch ;; *) continue ;; esac
+    json_str_v __ep_jr "$__ep_ref"
+    EXT_N=$((EXT_N + 1))
+    EXT_ROWS="$EXT_ROWS${EXT_ROWS:+,}{\"branch\":\"$__ep_jr\",\"sha\":\"$__ep_sha\",\"at\":$__ep_t,\"via\":\"$__ep_via\"}"
+  done <<<"$__ep_log"
+}
+
 MERGED=false; MERGE_SHA=""; MERGE_VIA=""
 probe_merged_into() { # branch target_ref
   local branch=$1 target=$2 bref tip="" line=""
@@ -1482,9 +1591,20 @@ run_probe() {
     fi
   fi
 
+  # a finish in flight (finish.lock): pushes it did not make, or a second finish
+  scan_external_pushes
+  if [ "$EXT_LOCK" = 1 ] && [ -n "$EXT_BRANCH" ] && [ "$EXT_BRANCH" != "$PROBE_BRANCH" ]; then
+    add_probe_warning "finish.lock says $EXT_BRANCH is being finished — finish one branch at a time, from one tool"
+    EXT_ROWS=""
+  elif [ "$EXT_NOLOG" = 1 ]; then
+    add_probe_warning "core.logAllRefUpdates is off: pushes from other tools during this finish cannot be seen (use --push-guard before every push)"
+  elif [ "$EXT_N" -gt 0 ]; then
+    add_probe_warning "origin changed $EXT_N time(s) during this finish without it (another tool, terminal or machine) — run --push-guard before the next push and show the user externalUpdates"
+  fi
+
   json_str_v jb "$PROBE_BRANCH"; json_str_v jt "$PROBE_VERSION"
-  printf '{"gitflowDoctor":"%s","probe":"%s","branch":"%s","version":"%s","steps":[%s],"warnings":[%s],"forecast":{%s}}\n' \
-    "$DOCTOR_VERSION" "$PROBE" "$jb" "$jt" "$PROBE_STEPS" "$PROBE_WARNINGS" "$PROBE_FORECAST"
+  printf '{"gitflowDoctor":"%s","probe":"%s","branch":"%s","version":"%s","steps":[%s],"warnings":[%s],"forecast":{%s},"externalUpdates":[%s]}\n' \
+    "$DOCTOR_VERSION" "$PROBE" "$jb" "$jt" "$PROBE_STEPS" "$PROBE_WARNINGS" "$PROBE_FORECAST" "$EXT_ROWS"
   exit 0
 }
 
@@ -1832,6 +1952,22 @@ if any_enabled operation-in-progress; then
       "\"operation\":\"$op\"" "$FIX" operation-in-progress
   else
     ok_check operation-in-progress
+  fi
+fi
+
+if any_enabled external-push-detected; then
+  scan_external_pushes
+  if [ "$EXT_NOLOG" = 1 ]; then
+    skip_check external-push-detected "reflog-disabled" "core.logAllRefUpdates is off — remote-tracking reflogs are not kept"
+  elif [ "$EXT_N" -gt 0 ]; then
+    json_str_v J "$EXT_BRANCH"
+    json_arr_v FIX "show the user each update: git log -1 <sha> (who pushed what, and from where)" \
+      "git fetch origin, then re-run the finish probe and --push-guard before any further push" \
+      "finish from one tool: do not mix a GUI finish with this one"
+    fail_check external-push-detected info "origin changed $EXT_N time(s) during the finish of $EXT_BRANCH without that finish" \
+      "\"branch\":\"$J\",\"since\":$EXT_STARTED,\"updates\":[$EXT_ROWS]" "$FIX" external-push-detected high "$EXT_BRANCH"
+  else
+    ok_check external-push-detected
   fi
 fi
 
