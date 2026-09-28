@@ -25,7 +25,7 @@ set -f # no pathname expansion: ref names may contain *?[ and several list
 LC_ALL=C
 export LC_ALL
 
-DOCTOR_VERSION="0.3.0"
+DOCTOR_VERSION="0.4.0"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 RELEASE_NAME_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 RELEASE_NAME_PRE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
@@ -575,6 +575,7 @@ WS_MAIN_RE='"main":"([^"]*)","develop"'
 WS_LATEST_RE='"latestTag":"([^"]*)"'
 WS_CRIT_RE='"critical":([0-9]+)'
 
+# shellcheck disable=SC2317 # invoked indirectly through capture
 in_repo() { # dir cmd... (subshell: the caller's cwd never changes)
   (cd "$1" || exit 1; shift; "$@")
 }
@@ -989,6 +990,7 @@ ver_parts() { # prefix version -> <prefix>Maj Min Pat Kind(-1 pre, 0 release, 1 
   printf -v "${1}Kind" '%s' "$__vp_kind"
   printf -v "${1}Rest" '%s' "${__vp_rest:-0}"
 }
+# shellcheck disable=SC2154 # _va*/_vb* are assigned via printf -v inside ver_parts
 version_cmp() { # a b (bare versions, no tag prefix) -> VCMP -1/0/1
   ver_parts _va "$1"; ver_parts _vb "$2"
   num_cmp "$_vaMaj" "$_vbMaj"; [ "$VCMP" != 0 ] && return
@@ -1029,6 +1031,7 @@ NEXT_HOTFIX=""
 [ -n "$LATEST_TAG" ] && ver_parts _nh "${LATEST_TAG#"$TAG_PREFIX"}"
 # a prerelease as the latest tag means X.Y.Z itself never shipped: there is
 # nothing to hotfix yet, so no suggestion (the agent asks the user)
+# shellcheck disable=SC2154 # _nh* are assigned via printf -v inside ver_parts
 if [ -n "$LATEST_TAG" ] && [ "$_nhKind" != -1 ]; then
   nh_hot=""; list_branches_v nh_hot "${HOTFIX_PREFIX}*"
   if [ "$VERSION_SCHEME" = suffix-counter ]; then
@@ -1552,7 +1555,7 @@ run_conventions() {
     capture_all main_info git log --no-walk=unsorted --format='%H %P%x09%s' $targets
   fi
   [ -n "$R_DEV" ] && capture_all dev_merges git log --first-parent --merges -n "$SCAN_DEPTH" --format='%H %P%x09%s' "$R_DEV"
-  local m p1 p2 msub br ver dline dp2 dsub
+  local m p2 msub br ver dline dp2 dsub
   while IFS= read -r t; do
     [ -z "$t" ] && continue
     tl=""; lookup_line tl "$TAG_LINES" "$t" || :
@@ -2102,6 +2105,7 @@ else
       sev=info; title="$br is $behind commit(s) behind $MAIN"
       if [ -n "$mc$dc" ]; then
         sev=warning; count_lines_v nconf "$mc$NL$dc"
+        # shellcheck disable=SC2154 # nconf is assigned via printf -v inside count_lines_v
         title="$title — its finish would conflict ($nconf path(s); resolve on the branch first)"
       fi
       json_str_v J "$br"
