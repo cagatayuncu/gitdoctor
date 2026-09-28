@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/cagatayuncu/gitdoctor/main/schema/gitflow-workspace.schema.json",
+  "title": "gitdoctor .gitflow-workspace.json",
+  "description": "Repos that release in lockstep (gitflow-doctor.sh --workspace). Paths are relative to this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repos"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "repos": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Path to a repo (required member)."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "optional": {
+                "type": "boolean",
+                "default": false,
+                "description": "May be absent or lack the branch; reported as skipped."
+              }
+            }
+          }
+        ]
+      }
+    },
+    "pushPolicy": {
+      "type": "string",
+      "enum": [
+        "all-verified",
+        "per-repo"
+      ],
+      "default": "all-verified",
+      "description": "all-verified: push nothing until every repo is merged, tagged and verified locally. Not atomic across repos."
+    }
+  }
+}

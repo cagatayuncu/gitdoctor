@@ -17,6 +17,15 @@ Prepares a repo for git flow. Idempotent — re-running fixes what is missing.
    (editor completion): detect version files — `package.json`, `*.csproj` with
    `<Version>`, `pyproject.toml`, `Cargo.toml`, `VERSION` — and write explicit
    `versionFiles` entries with presets.
+   **Existing history → infer, then propose.** Run
+   `bash <skill-dir>/scripts/gitflow-doctor.sh --conventions [--main <b>]`: it
+   reads the newest 5 release/hotfix tags on main and reports `tagPrefix`,
+   `tagType`, `messages` (`mergeToMain`, `backMerge`, `tag` as templates),
+   `backmergeStrategy` and `versionScheme`, each by majority vote. Show them
+   to the user as a proposed config block and write only what they accept.
+   Keys missing from the output had no evidence — leave them at defaults.
+   A `tagType` of `lightweight` is reported, not copied: recommend annotated
+   tags going forward (doctor: tag-lightweight-release).
 4. Append to `.gitattributes` (create if missing): `CHANGELOG.md merge=union`
    (use the configured changelog filename).
 5. If no semver tag exists, offer an initial `v0.1.0` (or user's choice) on
@@ -51,7 +60,10 @@ gitflow start release [X.Y.Z]
    `release.maxConcurrent` (doctor: multiple-release-branches).
 2. No version given → suggest one (§ Version suggestion) and confirm.
    Validate: bare `X.Y.Z` (prerelease only with `release.allowPrerelease`),
-   strictly greater than the latest tag (doctor: release-version-collision).
+   strictly greater than `repo.versions.latestTag` by SemVer precedence
+   (doctor: release-version-collision). Under `suffix-counter` a release must
+   move the base: `2.0.0` sorts BELOW `2.0.0-hotfix.3`, so the next one is
+   `2.1.0` (or `3.0.0`).
 3. ```bash
    git switch develop && git merge --ff-only origin/develop
    git switch -c release/X.Y.Z
@@ -67,8 +79,11 @@ gitflow start release [X.Y.Z]
 gitflow start hotfix [X.Y.Z]
 ```
 1. Preflight. Base is MAIN, never develop.
-2. No version → suggest latest tag + patch bump. Guard: `> latest tag` and
-   `< any open release version` (finish-hotfix.md § Version guard).
+2. No version → suggest the doctor's `repo.versions.nextHotfix` (semver: patch
+   bump of the latest tag; suffix-counter: same base, counter + 1 — both skip
+   numbers already held by open hotfix branches). Guard: `> latest tag` and
+   `< any open release version` (finish-hotfix.md § Version guard). The branch
+   is `hotfix/<version>`, e.g. `hotfix/2.0.0-hotfix.13`.
 3. ```bash
    git switch main && git merge --ff-only origin/main
    git switch -c hotfix/X.Y.Z
@@ -78,7 +93,7 @@ gitflow start hotfix [X.Y.Z]
 ## Version suggestion (conventional commits)
 
 Range: `git log --format='%s%n%b' <latest-tag>..origin/develop` (for hotfix:
-patch bump of the latest tag, no scan).
+no scan — take `repo.versions.nextHotfix`).
 
 - Any `BREAKING CHANGE:` in a body, or a `type!:` subject → **major**
 - else any `feat:`/`feat(scope):` subject → **minor**

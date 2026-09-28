@@ -19,8 +19,9 @@ branch-protection-aware PR/local merging.
 | Piece | Role |
 |---|---|
 | `SKILL.md` | Agent playbook: command routing, gates, dry-run contract, safety rails |
-| `scripts/gitflow-doctor.sh` | The only executable: 47 read-only checks + finish probes; JSON, text, Markdown, SARIF or baseline out |
-| `references/*.md` | Choreographies (finish release/hotfix/feature, init/start), fix recipes, config schema |
+| `scripts/gitflow-doctor.sh` | The only executable: 51 read-only checks, finish probes with conflict forecasts, convention inference, merge-resolution evidence and a multi-repo workspace view; JSON, text, Markdown, SARIF or baseline out |
+| `references/*.md` | Choreographies (finish release/hotfix/feature, init/start, workspace), fix recipes, config reference |
+| `schema/` | JSON Schemas for `.gitflow.json` and `.gitflow-workspace.json` |
 | `adapters/cursor/` | Cursor `/gitdoctor` command wrapper |
 | `tests/` | Fixture-based suite: every check has a scratch-repo test; probes and read-only guarantees included |
 
@@ -90,6 +91,12 @@ detects (`package.json`, `*.csproj`, `pyproject.toml`, `Cargo.toml`,
 there is none, and recommends branch protection. Re-running it only fixes what
 is missing.
 
+On a repo with history, init first reads how your team already works (tag
+prefix, annotated or lightweight tags, merge and tag messages, whether the tag
+or the branch goes back to develop, hotfix numbering) and proposes that as
+config instead of imposing gitdoctor's defaults. You accept or edit each
+value ([Your conventions](#your-conventions)).
+
 **2. Everyday work: features**
 
 ```
@@ -136,7 +143,7 @@ before deleting anything).
 | `/gitdoctor init` | Create develop, write `.gitflow.json`, changelog merge=union, protection advice |
 | `/gitdoctor start feature <name>` | Preflight → branch from develop |
 | `/gitdoctor start release [x.y.z]` | Version suggestion from conventional commits → branch from develop |
-| `/gitdoctor start hotfix [x.y.z]` | Branch from main, collision guards |
+| `/gitdoctor start hotfix [x.y.z]` | Branch from main; suggests the next free hotfix version; collision guards |
 | `/gitdoctor finish` | Detect branch type → merge (PR or local) + tag + GitHub Release + back-merge + cleanup; resumable. `--abort` (release/hotfix, before the merge to main), `--admin` (bypass required checks, explicit only) |
 | `/gitdoctor doctor` | Full anomaly/alignment scan with fix recipes |
 | `/gitdoctor sync` | fetch --prune + fast-forward main/develop |
@@ -144,6 +151,7 @@ before deleting anything).
 | `/gitdoctor cleanup` | Merged/stale branch cleanup (confirmed) |
 | `/gitdoctor explain <check-id>` | Print the fix recipe for one check (CLI: `--explain <id>`) |
 | `/gitdoctor baseline` | Adopt today's findings as `doctor.ignoreFindings` entries — only new ones stay loud |
+| `/gitdoctor workspace status\|finish <branch>` | Several repos released together: one view, one gated finish ([details](#several-repos-in-lockstep)) |
 
 Add `--dry-run` to any mutating command: reads run, every mutation is printed
 as `DRY-RUN: <argv>` instead of executed.
@@ -186,8 +194,9 @@ gitGraph
    conventional commits since the latest tag: a breaking change → major, else
    any `feat:` → minor, else patch. You see it as
    `v1.3.0 → v1.4.0 (3 feats, 5 fixes, 0 breaking)` and accept or override. It
-   must be greater than the latest tag; prerelease suffixes need
-   `release.allowPrerelease`.
+   must be greater than the latest tag by SemVer precedence (the doctor sorts
+   versions itself, so your `versionsort.suffix` setting can't change which
+   tag is "latest"); prerelease suffixes need `release.allowPrerelease`.
 3. **Branch.** `release/1.4.0` is cut from an up-to-date `develop` and pushed.
 4. **Bump now or at finish.** You are offered the version-file bump and the
    changelog section right away, which makes the release branch reviewable.
@@ -217,10 +226,26 @@ every step the probe already sees done:
 A post-flight re-probe and quick doctor confirm nothing was left behind, and
 you get the version, tag sha, PR links and release URL.
 
-**Back-merge conflicts** are predicted with `git merge-tree` before the merge.
-Version files resolve to the higher version and the changelog keeps both
-sides. Source files are never auto-resolved: you are walked through them, or
-the merge is aborted cleanly and the next `finish` resumes at that step.
+**Conflicts are forecast before anything merges.** The finish probe runs
+`git merge-tree` for every pending leg (into main, and the back-merge) and
+shows you the files first. The usual cause is a branch that main has moved
+past. The doctor reports it as `flow-branch-behind-main` long before finish
+day, and the advice is to merge main into the branch and resolve there, where
+the author knows the change; the finish then goes through clean.
+
+When a conflict does happen, version files resolve to the higher version and
+the changelog keeps both sides. Source files are never resolved silently. The
+agent may propose a resolution, but it commits it only after showing you
+`--merge-proof` evidence (the result is exactly ours plus their change and
+theirs plus ours, no markers left, line endings and BOM untouched) and getting
+your yes; otherwise the merge is aborted cleanly and the next `finish` resumes
+there. With `merge-branch` back-merges the same conflict comes back on develop,
+so both legs run with `rerere` and the first resolution is replayed.
+
+**A clean merge is not a working build.** With a `verify` block, local-mode
+finishes build or test the merged main before tagging and the merged develop
+before pushing; a failure stops before anything is published ([Your
+conventions](#your-conventions)).
 
 **When it doesn't go straight through**
 
@@ -267,16 +292,18 @@ gitGraph
 ### Open a hotfix
 
 ```
-/gitdoctor start hotfix           # suggests latest tag + patch
+/gitdoctor start hotfix           # suggests the next free hotfix version
 /gitdoctor start hotfix 1.3.1     # or name it
 ```
 
 1. **Preflight.** The base is always `main`; the doctor flags a hotfix cut
    from anywhere else (`wrong-base-hotfix`).
-2. **Version.** Suggested as a patch bump of the latest tag. It must be
-   greater than the latest tag **and** lower than any open release: with
-   `release/1.4.0` open and `v1.3.0` latest, the hotfix is `1.3.1`, never
-   `1.4.x`.
+2. **Version.** Suggested as a patch bump of the latest tag, or, with
+   `versionScheme: suffix-counter`, the same base with the counter + 1
+   (`2.0.0-hotfix.12` → `2.0.0-hotfix.13`). Numbers held by open hotfix
+   branches are skipped. It must be greater than the latest tag **and** lower
+   than any open release: with `release/1.4.0` open and `v1.3.0` latest, the
+   hotfix is `1.3.1`, never `1.4.x`.
 3. **Branch.** `hotfix/1.3.1` from an up-to-date `main`, pushed. Commit the fix
    there.
 
@@ -298,9 +325,73 @@ not exist yet, or its tip is not in main. A tagged, merged `release/*` branch
 is a leftover from a completed finish; it doesn't count (the doctor lists it
 as `orphaned-release-branch` for cleanup).
 
+**Several hotfixes open at once?** The doctor lists them in version order
+(`multiple-hotfix-branches`) with the tag each was cut from, how far main has
+moved past it and what its merge would conflict on, and names the one to
+finish first. Finishing out of order is allowed; the probe tells you.
+
 **Urgent and CI is slow?** `/gitdoctor finish --admin` merges the hotfix PR
 with `gh pr merge --admin`, skipping the wait. Only when you type it; it is
 never the default.
+
+## Your conventions
+
+gitdoctor's defaults (`v1.4.0` tags, "Release 1.4.0" merges, the tag merged
+back into develop) are only defaults. `init` infers yours from history
+(`--conventions`), and `.gitflow.json` keeps them:
+
+```json
+{
+  "tagPrefix": "",
+  "versionScheme": { "scheme": "suffix-counter", "hotfixPattern": "{base}-hotfix.{n}" },
+  "messages": {
+    "mergeToMain": "Merge branch '{branch}'",
+    "backMerge": "Merge branch '{branch}' into {develop}",
+    "tag": "{tag}"
+  },
+  "backmerge": { "strategy": "merge-branch" },
+  "verify": {
+    "main": [ { "run": "dotnet build -c Release", "expect": "bin/Release/**/*.dll" } ],
+    "develop": [ { "run": "npm ci && npm run build" } ]
+  }
+}
+```
+
+- **`versionScheme`**: `semver` (default) or `suffix-counter`, where hotfixes
+  are post-releases: `2.0.0` < `2.0.0-hotfix.9` < `2.0.0-hotfix.12` < `2.0.1`,
+  and `hotfix/2.0.0-hotfix.12` is a valid branch name.
+- **`messages`**: templates for the merge into main, the back-merge and the
+  tag message (`{branch}`, `{tag}`, `{version}`, `{type}`, `{main}`,
+  `{develop}`). PR titles use them too.
+- **`verify`**: commands run after a local merge and before its push. They are
+  read from `origin/main`'s copy of the config, never from the branch being
+  finished, and you confirm them before the first run.
+
+Full reference: [references/config.md](references/config.md).
+
+## Several repos in lockstep
+
+When a version ships from several repos at once (backend, UIs, an SDK), list
+them in a `.gitflow-workspace.json`:
+
+```json
+{ "repos": ["../backend", "../web-ui", { "path": "../sdk", "optional": true }],
+  "pushPolicy": "all-verified" }
+```
+
+```bash
+bash scripts/gitflow-doctor.sh --workspace ../.gitflow-workspace.json \
+  --branch hotfix/2.0.0-hotfix.12 --tag 2.0.0-hotfix.12
+```
+
+One JSON: every repo's doctor summary, its finish probe for that branch
+(repos without the branch are reported `skipped: no branch`), and whether the
+tag agrees everywhere: same type, same message pattern, on main's tip
+(`tag-convention-drift`). `/gitdoctor workspace finish <branch>` merges, tags
+and verifies every repo locally and pushes only when all of them passed. No
+push across repos is atomic, and the playbook says so: if a push fails
+half-way, each repo resumes with its own probe walk. See
+[references/workspace.md](references/workspace.md).
 
 ## Integrations
 
@@ -321,22 +412,30 @@ bash scripts/gitflow-doctor.sh --checks missing-back-merge,tag-unpushed
 bash scripts/gitflow-doctor.sh --explain missing-back-merge   # the fix recipe, in the terminal
 bash scripts/gitflow-doctor.sh --list-checks
 bash scripts/gitflow-doctor.sh --probe finish-release --branch release/1.2.0 --version 1.2.0
+bash scripts/gitflow-doctor.sh --conventions                    # tag/message/back-merge style from history
+bash scripts/gitflow-doctor.sh --merge-proof                    # during a conflicted merge: evidence per file
+bash scripts/gitflow-doctor.sh --workspace ws.json --tag 2.0.0  # several repos at once
 ```
 
-Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. 47 checks across environment,
+Exit codes: 0 clean, 1 warnings, 2 criticals, 4 usage error. 51 checks across environment,
 worktree, local↔origin sync, git-flow topology (missing back-merge, wrong
-base, orphaned/colliding releases), tags (unpushed, sha-mismatch, duplicates,
+base, orphaned/colliding releases and hotfixes, branches main has moved past,
+several open hotfixes), tags (unpushed, sha-mismatch, duplicates,
 lightweight, unsigned), release bookkeeping (version files and changelog vs
 the latest tag), branch hygiene (stale/squash-merged), and GitHub (protection
 on main and develop, wrong-base PRs, squash-only limitations, tags without a
-Release), and distribution (a Homebrew tap formula lagging the latest tag). Every finding names what it is about (`key`), so
+Release), distribution (a Homebrew tap formula lagging the latest tag), and
+workspaces (a missing repo, a tag that differs between repos). The JSON also
+carries `repo.versions`: the latest tag by SemVer precedence and the next
+hotfix version. Every finding names what it is about (`key`), so
 `doctor.ignoreFindings` can silence one branch or tag instead of a whole check,
 and `--format baseline` writes those entries for you. Full catalog with
 recipes: [references/fix-recipes.md](references/fix-recipes.md).
 
 Configuration: [.gitflow.json reference](references/config.md) — add
 `"$schema": "https://raw.githubusercontent.com/cagatayuncu/gitdoctor/main/schema/gitflow.schema.json"`
-for editor completion ([schema/gitflow.schema.json](schema/gitflow.schema.json)).
+for editor completion ([schema/gitflow.schema.json](schema/gitflow.schema.json);
+workspaces: [schema/gitflow-workspace.schema.json](schema/gitflow-workspace.schema.json)).
 
 ## Tests
 

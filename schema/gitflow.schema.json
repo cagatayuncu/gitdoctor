@@ -205,6 +205,68 @@
         }
       }
     },
+    "versionScheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How versions order. The doctor compares in bash (never git's versionsort) and reports repo.versions.",
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "enum": [
+            "semver",
+            "suffix-counter"
+          ],
+          "default": "semver",
+          "description": "semver = SemVer 2.0 precedence. suffix-counter = hotfixes are post-releases X.Y.Z<infix>N that sort after X.Y.Z."
+        },
+        "hotfixPattern": {
+          "type": "string",
+          "pattern": "^\\{base\\}-[0-9A-Za-z.-]*[A-Za-z.-]\\{n\\}$",
+          "default": "{base}-hotfix.{n}",
+          "description": "suffix-counter hotfix version: {base} = X.Y.Z, {n} = counter."
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Commands the agent runs after a local merge and before its push (read from origin/<main>, confirmed by the user).",
+      "properties": {
+        "timeoutMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 15
+        },
+        "main": {
+          "$ref": "#/definitions/verifySteps"
+        },
+        "develop": {
+          "$ref": "#/definitions/verifySteps"
+        }
+      }
+    },
+    "messages": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Commit/tag message templates. Placeholders: {branch} {tag} {version} {type} {main} {develop}.",
+      "properties": {
+        "mergeToMain": {
+          "type": "string",
+          "default": "Release {version}",
+          "description": "Merge commit (and PR title) into main."
+        },
+        "backMerge": {
+          "type": "string",
+          "default": "Back-merge release {version}",
+          "description": "Back-merge commit (and PR title) into develop or an open release."
+        },
+        "tag": {
+          "type": "string",
+          "default": "Release {version}",
+          "description": "Annotated tag message."
+        }
+      }
+    },
     "backmerge": {
       "type": "object",
       "additionalProperties": false,
@@ -325,6 +387,32 @@
         "formula": {
           "type": "string",
           "description": "Formula path inside the tap, e.g. Formula/gitdoctor.rb."
+        }
+      }
+    }
+  },
+  "definitions": {
+    "verifySteps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run"
+        ],
+        "properties": {
+          "run": {
+            "type": "string",
+            "description": "Shell command; run with pipefail from the repo root."
+          },
+          "expect": {
+            "type": "string",
+            "description": "Path glob the run must create or update (catches tools that exit 0 without working)."
+          },
+          "sideEffects": {
+            "type": "string",
+            "description": "What the command changes outside the tree, shown to the user."
+          }
         }
       }
     }
