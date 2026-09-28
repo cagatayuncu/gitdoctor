@@ -13,12 +13,26 @@ the probe walk — safe to re-run after any interruption.
    bash <skill-dir>/scripts/gitflow-doctor.sh --probe finish-release \
      --branch release/X.Y.Z --version X.Y.Z [config flags incl. --version-file/--version-pattern]
    ```
-   Any probe `warnings` (tag divergence) → STOP, show the user, do not retag.
+   Any probe `warnings` about tag divergence → STOP, show the user, do not retag.
+   **Conflict forecast**: the probe's `forecast` lists the paths each PENDING
+   leg would conflict on (`main`, `backMerge`; feature probes: `develop`).
+   Show a non-empty forecast to the user BEFORE any merge. Recommended fix
+   (fix-recipes.md#flow-branch-behind-main): merge main into the branch and
+   let the branch's author resolve there, then re-run finish — the legs then
+   merge clean. Continue into a forecast conflict only on the user's say-so.
+   A probe warning that a LOWER hotfix is still open is informational: tell
+   the user, proceed if they want this one first.
 3. Resolve merge mode for main and for develop separately (SKILL.md
    § Merge-mode resolution).
 4. `finish --abort` is only legal while `merged-to-main` is still false:
    close the PR if one was opened (`gh pr close <n>`), keep the branch, done.
    After merged-to-main, the only way out is forward — resume.
+
+5. Render the message templates once (references/config.md § messages;
+   defaults `Release {version}` / `Back-merge release {version}` /
+   `Release {version}`): `{branch}` = `release/X.Y.Z`, `{tag}` = `vX.Y.Z`,
+   `{version}` = `X.Y.Z`, `{type}` = `release`. Every `<messages.*>` below is
+   the rendered string.
 
 Walk the steps below in order; SKIP any step the probe reports `done:true`.
 Re-probe after each mutation.
@@ -39,14 +53,15 @@ If version files are configured and not at X.Y.Z on the branch:
 ```bash
 git switch main
 git merge --ff-only origin/main
-git merge --no-ff release/X.Y.Z -m "Release X.Y.Z"
+git merge --no-ff release/X.Y.Z -m "<messages.mergeToMain>"
 ```
-Do NOT push yet — step 3+4 push main and the tag atomically.
+Do NOT push yet — step 3+4 push main and the tag atomically. If `verify.main`
+is configured, run § Verify on this merged main NOW, before tagging.
 
 **PR mode** (main protected):
 1. Reuse or create the PR:
    `gh pr list --head release/X.Y.Z --base main --state open --json number`
-   → else `gh pr create --base main --head release/X.Y.Z --title "Release X.Y.Z" --body "<changelog section>"`
+   → else `gh pr create --base main --head release/X.Y.Z --title "<messages.mergeToMain>" --body "<changelog section>"`
 2. `gh pr checks <n> --watch --fail-fast` — on red: report the failing
    checks and stop (offer `gh pr merge <n> --auto` only if the user wants
    merge-on-green; the finish stays resumable either way).
@@ -55,7 +70,7 @@ Do NOT push yet — step 3+4 push main and the tag atomically.
 
 ## 3. tag-exists
 
-**Local mode**: `git tag -a vX.Y.Z -m "Release X.Y.Z"` on the merge commit
+**Local mode**: `git tag -a vX.Y.Z -m "<messages.tag>"` on the merge commit
 (HEAD of main after step 2).
 
 **PR mode**: never tag a local sha — the merge happened on GitHub:
@@ -63,7 +78,7 @@ Do NOT push yet — step 3+4 push main and the tag atomically.
 SHA=$(gh pr view <n> --json mergeCommit --jq .mergeCommit.oid)
 git fetch origin main
 git merge-base --is-ancestor "$SHA" origin/main   # verify before tagging
-git tag -a vX.Y.Z "$SHA" -m "Release X.Y.Z"
+git tag -a vX.Y.Z "$SHA" -m "<messages.tag>"
 ```
 `mergeCommit.oid` is populated for all three merge methods (merge → merge
 commit, squash → squash commit, rebase → last rebased commit).
@@ -79,6 +94,39 @@ git push --atomic origin main refs/tags/vX.Y.Z
 ```
 **PR mode** (main already on GitHub): `git push origin vX.Y.Z`
 
+A push from somewhere else in the meantime (a GUI "finish", a teammate) is
+safe to meet: if origin already has exactly these commits the push is a no-op
+and the re-probe shows the step done; if origin moved to OTHER commits, git
+rejects the non-fast-forward push — stop, re-probe, never `--force`. Finish
+from one tool in one session; do not split a finish between a GUI and this
+flow (a half-done GUI finish is what the probe walk exists to repair).
+
+## Verify (local-mode legs, when `verify` is configured)
+
+A clean merge is not working code — two sides can merge textually and still
+break the build. `verify.main` runs on the merged main before the tag is
+created and pushed (step 2 → 3); `verify.develop` runs on the merged
+back-merge target before its push (step 5). PR mode leaves this to CI.
+
+1. **Read the commands from `origin/<main>`**, not from the branch being
+   finished: `git show origin/<main>:.gitflow.json`. A branch must never be
+   able to change what runs on the finisher's machine. First use in a
+   session: show every `run` (and its `sideEffects` note) to the user and get
+   a yes.
+2. Run each entry from the repo root with a `timeoutMinutes` budget
+   (default 15): `bash -o pipefail -c '<run>'` — `pipefail` so a pipe cannot
+   hide a failing exit code. Windows Git Bash rewrites `/switch` arguments into
+   paths (MSBuild `/t:Build` silently builds nothing): prefer dash switches
+   (`-t:Build -m`) or prefix `MSYS2_ARG_CONV_EXCL='*'`.
+3. If an entry has `expect` (a path glob that the run must create or update),
+   check it: some tools exit 0 without doing the work.
+4. Any failure → do NOT tag or push. Report the command, its exit code and
+   the last lines of output. The merge exists only locally; after the user
+   fixes the branch, undo it with `git reset --hard origin/<main>` (confirm
+   first — it discards the unpushed merge commit) and re-run finish.
+5. After a pass, tell the user what `sideEffects` may have touched (e.g. a
+   build that rewrites an ignored local config).
+
 ## 5. back-merged (target: develop)
 
 Merge **the tag** (`backmerge.strategy: merge-tag`, default) so main becomes
@@ -88,21 +136,24 @@ Develop unprotected:
 ```bash
 git switch develop
 git merge --ff-only origin/develop
-git merge --no-ff vX.Y.Z -m "Back-merge release X.Y.Z"
+git merge --no-ff vX.Y.Z -m "<messages.backMerge>"
+# verify.develop configured → § Verify here, before the push
 git push origin develop
 ```
 Develop protected: carrier branch + PR:
 ```bash
 git switch -c backmerge/release-X.Y.Z vX.Y.Z
 git push -u origin backmerge/release-X.Y.Z
-gh pr create --base develop --head backmerge/release-X.Y.Z --title "Back-merge release X.Y.Z" --fill
+gh pr create --base develop --head backmerge/release-X.Y.Z --title "<messages.backMerge>" --fill
 # checks → merge with the MERGE method if allowed; squash-only repos: see below
 # after merge: delete the carrier branch (--delete-branch)
 ```
 
 ### Back-merge conflicts
 
-Predict first: `git merge-tree --write-tree --name-only origin/develop vX.Y.Z`
+Predict first: the probe's `forecast.backMerge` (before the tag exists it
+stands the branch in for the tag); once tagged, re-check with
+`git merge-tree --write-tree --name-only origin/develop vX.Y.Z`
 (exit 1 = conflicts; lines after the tree oid = paths). Tell the user before
 merging. On conflict, resolve by file class:
 - **Version files** (paths in `versionFiles`): policy `higher` — compare
@@ -115,6 +166,28 @@ merging. On conflict, resolve by file class:
   each conflict and commit with the default merge message. Non-interactive:
   `git merge --abort`, report, and instruct to re-run finish (it resumes at
   this step).
+- **Proposed resolution with evidence** (any leg, source files included): when
+  a conflict is a union of two independent edits (one side deleted a comment,
+  the other added lines next to it), you may PROPOSE the resolution: write
+  it, `git add` it, then run
+  `bash <skill-dir>/scripts/gitflow-doctor.sh --offline --merge-proof`.
+  Per conflicted file it reports `oursPlusTheirChange` (resolved = ours +
+  exactly their hunks), `theirsPlusOurChange` (the mirror), `markers`,
+  `eolPreserved`, `bomPreserved` and a `validator` hint (`xml`/`json`/`yaml`:
+  parse the staged file with it). Show the user the two diffs behind the
+  first two fields (`git diff --cached HEAD -- <f>`, `git diff --cached
+  MERGE_HEAD -- <f>`) and the verdict. Commit ONLY on the user's explicit yes;
+  otherwise abort as above. `verdict:"consistent"` is evidence, not a licence
+  — the user still decides. Diffs of generated content go through temporary
+  files: on Git Bash `git diff --no-index <(...) <(...)` fails (git.exe cannot
+  open `/proc/<pid>/fd`).
+- **Same conflict twice** (`backmerge.strategy: merge-branch` replays the main
+  leg's conflict on develop; `merge-tag` usually does not, because the tag
+  already carries the resolution): run BOTH legs with
+  `git -c rerere.enabled=true merge ...` and `git -c rerere.enabled=true commit`
+  so the first resolution is recorded and replayed. A replayed resolution is
+  still re-proved with `--merge-proof` and confirmed; `.git/rr-cache` stays in
+  the repo — mention it.
 Never leave MERGE_HEAD behind — every exit commits or aborts.
 
 ### Squash-only + protected develop

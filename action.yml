@@ -1,7 +1,7 @@
 # Marketplace listing name (must be globally unique; the `uses:` path stays
 # cagatayuncu/gitdoctor regardless) and a <125-char description.
 name: "gitdoctor - Git Flow health gate"
-description: "Git Flow health gate: 47 read-only repo checks with fix recipes, a self-updating PR comment and SARIF."
+description: "Git Flow health gate: 51 read-only repo checks with fix recipes, a self-updating PR comment and SARIF."
 author: "Çağatay UNCU"
 branding:
   icon: "activity"
@@ -13,13 +13,13 @@ branding:
 #   - uses: actions/checkout@v4
 #     with: { fetch-depth: 0 }
 #   - run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
-#   - uses: cagatayuncu/gitdoctor@v0.3.0
+#   - uses: cagatayuncu/gitdoctor@v0.4.0
 #
 # For the PR comment, the job needs: permissions: { pull-requests: write }.
 
 inputs:
   checks:
-    description: "Comma-separated check ids to run (empty = all 47; see --list-checks)"
+    description: "Comma-separated check ids to run (empty = all 51; see --list-checks)"
     required: false
     default: ""
   skip:

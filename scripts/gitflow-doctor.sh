@@ -25,7 +25,7 @@ set -f # no pathname expansion: ref names may contain *?[ and several list
 LC_ALL=C
 export LC_ALL
 
-DOCTOR_VERSION="0.3.0"
+DOCTOR_VERSION="0.4.0"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 RELEASE_NAME_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 RELEASE_NAME_PRE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
@@ -63,7 +63,16 @@ IGNORE_SHAS=""
 IGNORE_FINDINGS=""
 ASSUME_GITHUB=""
 ALLOW_PRERELEASE=0
+VERSION_SCHEME=""
+HOTFIX_PATTERN=""
+HOTFIX_INFIX=""
 MERGE_MODE="auto"
+CONVENTIONS=0
+MERGE_PROOF=0
+WORKSPACE=""
+WS_TAG=""
+WS_POLICY=""
+WS_PASS=""
 PROBE=""
 PROBE_BRANCH=""
 PROBE_VERSION=""
@@ -94,6 +103,9 @@ usage: gitflow-doctor.sh [options]
   --version-file PATH --version-pattern ERE   (repeatable, paired; POSIX ERE
                              matched per line, capture group 1 = version)
   --allow-prerelease         accept x.y.z-suffix in release/hotfix branch names
+  --version-scheme S         semver (default) | suffix-counter (hotfixes are
+                             post-releases X.Y.Z<infix>N that sort after X.Y.Z)
+  --hotfix-pattern P         suffix-counter hotfix version, default {base}-hotfix.{n}
   --changelog PATH           changelog file (enables changelog-tag-mismatch)
   --no-github-release        repo does not publish GitHub Releases (skips gh-release-missing-for-tag)
   --require-signed-tags      release tags must be GPG/SSH signed (enables tag-unsigned)
@@ -102,6 +114,13 @@ usage: gitflow-doctor.sh [options]
                              homebrew-formula-stale check and the finish probe step)
   --assume-github owner/repo force GitHub mode even for non-github origin (tests)
   --probe finish-release|finish-hotfix|finish-feature --branch B [--version V]
+  --conventions              infer tag/message/back-merge conventions from the
+                             newest release/hotfix tags on main (JSON) and exit
+  --merge-proof              during a conflicted merge: evidence per conflicted file
+                             that the staged resolution keeps both sides (JSON) and exit
+  --workspace FILE [--branch B] [--tag T]
+                             several repos in lockstep (.gitflow-workspace.json): per-repo
+                             doctor summary, finish probe for B, tag consistency for T
 EOF
 }
 
@@ -143,7 +162,13 @@ while [ $# -gt 0 ]; do
     --version-file) VF_PATHS="$VF_PATHS${VF_PATHS:+$NL}${2:?}"; shift 2 ;;
     --version-pattern) VF_PATTERNS="$VF_PATTERNS${VF_PATTERNS:+$NL}${2:?}"; VF_COUNT=$((VF_COUNT + 1)); shift 2 ;;
     --allow-prerelease) ALLOW_PRERELEASE=1; shift ;;
+    --version-scheme) VERSION_SCHEME=${2:?}; shift 2 ;;
+    --hotfix-pattern) HOTFIX_PATTERN=${2:?}; shift 2 ;;
     --assume-github) ASSUME_GITHUB=${2:?}; shift 2 ;;
+    --conventions) CONVENTIONS=1; shift ;;
+    --merge-proof) MERGE_PROOF=1; shift ;;
+    --workspace) WORKSPACE=${2:?}; shift 2 ;;
+    --tag) WS_TAG=${2:?}; shift 2 ;;
     --probe) PROBE=${2:?}; shift 2 ;;
     --branch) PROBE_BRANCH=${2:?}; shift 2 ;;
     --version) PROBE_VERSION=${2:?}; shift 2 ;;
@@ -153,11 +178,12 @@ while [ $# -gt 0 ]; do
 done
 
 case "$FORMAT" in json|jsonl|text|markdown|sarif|baseline) : ;; *) die_usage "--format must be json, jsonl, text, markdown, sarif or baseline" ;; esac
+case "$VERSION_SCHEME" in ''|semver|suffix-counter) : ;; *) die_usage "--version-scheme must be semver or suffix-counter" ;; esac
 
 # ---------------------------------------------------------------------------
 # Check catalog (the authoritative id list; README/action counts derive from it)
 # ---------------------------------------------------------------------------
-ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift multiple-release-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale"
+ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift flow-branch-behind-main multiple-release-branches multiple-hotfix-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale tag-convention-drift workspace-repo-missing"
 RECIPES_URL="https://github.com/cagatayuncu/gitdoctor/blob/main/references/fix-recipes.md"
 
 known_check_id() { case " $ALL_CHECK_IDS " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -388,6 +414,7 @@ render_text() {
   printf 'gitdoctor %s  %s\n' "$DOCTOR_VERSION" "${REPO_ROOT:-$PWD}"
   printf 'main: %s  develop: %s  github: %s  merge-mode: %s (main=%s, develop=%s)\n\n' \
     "${MAIN:-?}" "${DEVELOP:-?}" "${SLUG:--}" "$MERGE_MODE" "${RESOLVED_MAIN_MODE:-unknown}" "${RESOLVED_DEV_MODE:-unknown}"
+  [ -n "${LATEST_TAG:-}" ] && printf 'latest tag: %s (%s)  next hotfix: %s\n\n' "$LATEST_TAG" "$VERSION_SCHEME" "${NEXT_HOTFIX:--}"
   [ -z "$REC_LINES" ] && printf 'no findings\n'
   while IFS="$US" read -r kind id sev title conf recipe key fix; do
     [ -z "$kind" ] && continue
@@ -488,7 +515,10 @@ print_output() {
   local jr js jm jd
   json_str_v jr "${REPO_ROOT:-}"; json_str_v js "${SLUG:-}"
   json_str_v jm "${MAIN:-}"; json_str_v jd "${DEVELOP:-}"
-  repo="{\"root\":\"$jr\",\"github\":\"$js\",\"main\":\"$jm\",\"develop\":\"$jd\",\"mergeMode\":{\"configured\":\"$MERGE_MODE\",\"resolved\":{\"main\":\"${RESOLVED_MAIN_MODE:-unknown}\",\"develop\":\"${RESOLVED_DEV_MODE:-unknown}\"}}}"
+  local jl jn
+  json_str_v jl "${LATEST_TAG:-}"; json_str_v jn "${NEXT_HOTFIX:-}"
+  repo="{\"root\":\"$jr\",\"github\":\"$js\",\"main\":\"$jm\",\"develop\":\"$jd\",\"mergeMode\":{\"configured\":\"$MERGE_MODE\",\"resolved\":{\"main\":\"${RESOLVED_MAIN_MODE:-unknown}\",\"develop\":\"${RESOLVED_DEV_MODE:-unknown}\"}}"
+  repo="$repo,\"versions\":{\"scheme\":\"${VERSION_SCHEME:-semver}\",\"latestTag\":\"$jl\",\"nextHotfix\":\"$jn\"}}"
   case "$FORMAT" in
     text) render_text; return ;;
     markdown) render_markdown; return ;;
@@ -513,6 +543,186 @@ finish_exit() {
   case "$WORST" in 3) exit 2 ;; 2) exit 1 ;; *) exit 0 ;; esac
 }
 
+template_v() { # varname subject branch tag version -> placeholders substituted
+  local __tp_s=$2 __tp_b='{branch}' __tp_t='{tag}' __tp_v='{version}' __tp_d="into {develop}" __tp_m="into {main}"
+  [ -n "$3" ] && __tp_s=${__tp_s//"$3"/$__tp_b}
+  [ -n "$4" ] && __tp_s=${__tp_s//"$4"/$__tp_t}
+  [ -n "$5" ] && __tp_s=${__tp_s//"$5"/$__tp_v}
+  [ -n "$DEVELOP" ] && __tp_s=${__tp_s//"into $DEVELOP"/$__tp_d}
+  [ -n "$MAIN" ] && __tp_s=${__tp_s//"into $MAIN"/$__tp_m}
+  printf -v "$1" '%s' "$__tp_s"
+}
+
+distinct_count_v() { # varname newline-list -> number of distinct lines (empty lines count too)
+  local __dc_v=$1 __dc_l __dc_seen="$NL" __dc_n=0
+  while IFS= read -r __dc_l; do
+    case "$__dc_seen" in *"$NL$__dc_l$NL"*) continue ;; esac
+    __dc_seen="$__dc_seen$__dc_l$NL"; __dc_n=$((__dc_n + 1))
+  done <<<"$2"
+  printf -v "$__dc_v" '%s' "$__dc_n"
+}
+
+# ===========================================================================
+# WORKSPACE MODE — several repos released in lockstep (read-only). Runs before
+# the repo bootstrap: the workspace file usually lives OUTSIDE any repo.
+# ===========================================================================
+WS_ITEM_RE='^[[:space:],]*("([^"]*)"|\{([^}]*)\})'
+WS_PATH_RE='"path"[[:space:]]*:[[:space:]]*"([^"]*)"'
+WS_OPT_RE='"optional"[[:space:]]*:[[:space:]]*true'
+WS_POLICY_RE='"pushPolicy"[[:space:]]*:[[:space:]]*"([^"]*)"'
+WS_SUMMARY_RE='"summary":(\{[^}]*\})'
+WS_MAIN_RE='"main":"([^"]*)","develop"'
+WS_LATEST_RE='"latestTag":"([^"]*)"'
+WS_CRIT_RE='"critical":([0-9]+)'
+
+# shellcheck disable=SC2317 # invoked indirectly through capture
+in_repo() { # dir cmd... (subshell: the caller's cwd never changes)
+  (cd "$1" || exit 1; shift; "$@")
+}
+
+ws_entries_v() { # varname workspace-file -> lines "optional<US>path"; also sets WS_POLICY
+  local __we_v=$1 __we_all="" __we_l __we_arr __we_item __we_obj __we_p __we_opt __we_out=""
+  while IFS= read -r __we_l || [ -n "$__we_l" ]; do __we_all="$__we_all ${__we_l%$'\r'}"; done <"$2"
+  WS_POLICY=""
+  [[ $__we_all =~ $WS_POLICY_RE ]] && WS_POLICY=${BASH_REMATCH[1]}
+  case "$__we_all" in *'"repos"'*) : ;; *) die_usage "--workspace: no \"repos\" array in $2" ;; esac
+  __we_arr=${__we_all#*'"repos"'}; __we_arr=${__we_arr#*[}; __we_arr=${__we_arr%%]*}
+  while [[ $__we_arr =~ $WS_ITEM_RE ]]; do
+    __we_item=${BASH_REMATCH[0]}; __we_p=${BASH_REMATCH[2]}; __we_obj=${BASH_REMATCH[3]}; __we_opt=false
+    if [ -n "$__we_obj" ]; then
+      __we_p=""
+      [[ $__we_obj =~ $WS_PATH_RE ]] && __we_p=${BASH_REMATCH[1]}
+      [[ $__we_obj =~ $WS_OPT_RE ]] && __we_opt=true
+    fi
+    __we_arr=${__we_arr:${#__we_item}}
+    [ -n "$__we_p" ] && __we_out="$__we_out${__we_out:+$NL}$__we_opt$US$__we_p"
+  done
+  clear_v "$__we_v"
+  [ -n "$__we_out" ] && printf -v "$__we_v" '%s' "$__we_out"
+  return 0
+}
+
+ws_tag_facts() { # repo-dir main-name -> WT_EXISTS WT_TYPE WT_MSG WT_ONTIP
+  local tf="" typ r obj peeled subj target tip=""
+  WT_EXISTS=false; WT_TYPE=""; WT_MSG=""; WT_ONTIP=false
+  capture tf git -C "$1" for-each-ref --format='%(objecttype)%09%(objectname)%09%(*objectname)%09%(contents:subject)' "refs/tags/$WS_TAG"
+  [ -n "$tf" ] || return 0
+  WT_EXISTS=true
+  typ=${tf%%$'\t'*}; r=${tf#*$'\t'}; obj=${r%%$'\t'*}; r=${r#*$'\t'}; peeled=${r%%$'\t'*}; subj=${r#*$'\t'}
+  target=$obj; WT_TYPE=lightweight
+  if [ "$typ" = tag ]; then
+    target=$peeled; WT_TYPE=annotated
+    template_v WT_MSG "$subj" "" "$WS_TAG" "${WS_TAG#v}"
+  fi
+  if [ -n "$2" ]; then
+    capture tip git -C "$1" rev-parse -q --verify "refs/remotes/origin/$2^{commit}"
+    [ -z "$tip" ] && capture tip git -C "$1" rev-parse -q --verify "refs/heads/$2^{commit}"
+  fi
+  [ -n "$tip" ] && [ "$tip" = "$target" ] && WT_ONTIP=true
+  return 0
+}
+
+ws_branch_json_v() { # varname repo-dir self -> ,"branch":{...}[,"probe":{...}]
+  local __wb_v=$1 __wb_bl="" __wb_jb __wb_kind="" __wb_ver="" __wb_pr="" __wb_pj=null
+  capture __wb_bl git -C "$2" for-each-ref --format='%(refname)' "refs/heads/$PROBE_BRANCH" "refs/remotes/origin/$PROBE_BRANCH"
+  json_str_v __wb_jb "$PROBE_BRANCH"
+  if [ -z "$__wb_bl" ]; then
+    printf -v "$__wb_v" ',"branch":{"name":"%s","present":false,"skipped":"no branch"}' "$__wb_jb"
+    return 0
+  fi
+  case "$PROBE_BRANCH" in
+    "$RELEASE_PREFIX"*) __wb_kind=finish-release; __wb_ver=${PROBE_BRANCH#"$RELEASE_PREFIX"} ;;
+    "$HOTFIX_PREFIX"*) __wb_kind=finish-hotfix; __wb_ver=${PROBE_BRANCH#"$HOTFIX_PREFIX"} ;;
+    "$FEATURE_PREFIX"*) __wb_kind=finish-feature ;;
+  esac
+  if [ -n "$__wb_ver" ]; then
+    # shellcheck disable=SC2086 # WS_PASS is a flag list, split on purpose
+    capture __wb_pr in_repo "$2" bash "$3" --probe "$__wb_kind" --branch "$PROBE_BRANCH" --version "$__wb_ver" $WS_PASS
+  elif [ -n "$__wb_kind" ]; then
+    # shellcheck disable=SC2086
+    capture __wb_pr in_repo "$2" bash "$3" --probe "$__wb_kind" --branch "$PROBE_BRANCH" $WS_PASS
+  fi
+  [ -n "$__wb_pr" ] && __wb_pj=$__wb_pr
+  printf -v "$__wb_v" ',"branch":{"name":"%s","present":true},"probe":%s' "$__wb_jb" "$__wb_pj"
+}
+
+run_workspace() {
+  local file=$WORKSPACE self=${BASH_SOURCE[0]} dir entries="" opt p rp jp robj repos="" dj summ rmain lt crit
+  local status
+  local ws_crit=0 bj types="" msgs="" rows="" missing=0 offtip=0 have_tag=0 jt jm reasons="" n line joined=""
+  [ -f "$file" ] || die_usage "--workspace: file not found: $file"
+  case "$self" in /*|[A-Za-z]:*) : ;; *) self="$PWD/$self" ;; esac
+  dir=${file%/*}; [ "$dir" = "$file" ] && dir=.
+  WS_PASS="--now $NOW"
+  if [ "$OFFLINE" = 1 ]; then WS_PASS="$WS_PASS --offline"; elif [ "$DO_FETCH" = 0 ]; then WS_PASS="$WS_PASS --no-fetch"; fi
+  ws_entries_v entries "$file"
+  json_str_v jt "$WS_TAG"
+  while IFS="$US" read -r opt p; do
+    [ -z "$p" ] && continue
+    rp=$p
+    case "$p" in /*|[A-Za-z]:*) : ;; *) rp="$dir/$p" ;; esac
+    json_str_v jp "$p"
+    if [ ! -e "$rp/.git" ]; then
+      repos="$repos${repos:+,}{\"path\":\"$jp\",\"optional\":$opt,\"status\":\"missing\"}"
+      if [ "$opt" = false ]; then
+        json_arr_v FIX "clone it at $rp, or mark it \"optional\": true in $file"
+        fail_check workspace-repo-missing critical "required repo $p not found at $rp" "\"path\":\"$jp\"" "$FIX" workspace-repo-missing high "$p"
+      fi
+      continue
+    fi
+    dj=""
+    # shellcheck disable=SC2086
+    capture dj in_repo "$rp" bash "$self" --format json $WS_PASS
+    summ="{}"; rmain=""; lt=""; crit=0
+    [[ $dj =~ $WS_SUMMARY_RE ]] && summ=${BASH_REMATCH[1]}
+    [[ $dj =~ $WS_MAIN_RE ]] && rmain=${BASH_REMATCH[1]}
+    [[ $dj =~ $WS_LATEST_RE ]] && lt=${BASH_REMATCH[1]}
+    [[ $summ =~ $WS_CRIT_RE ]] && crit=${BASH_REMATCH[1]}
+    [ "$crit" -gt 0 ] && ws_crit=1
+    status=ok; [ -z "$dj" ] && status=error
+    robj="{\"path\":\"$jp\",\"optional\":$opt,\"status\":\"$status\",\"summary\":$summ,\"main\":\"$rmain\",\"latestTag\":\"$lt\""
+    if [ -n "$PROBE_BRANCH" ]; then ws_branch_json_v bj "$rp" "$self"; robj="$robj$bj"; fi
+    if [ -n "$WS_TAG" ]; then
+      ws_tag_facts "$rp" "$rmain"
+      if [ "$WT_EXISTS" = true ]; then
+        have_tag=1
+        json_str_v jm "$WT_MSG"
+        robj="$robj,\"tag\":{\"name\":\"$jt\",\"type\":\"$WT_TYPE\",\"message\":\"$jm\",\"onMainTip\":$WT_ONTIP}"
+        types="$types${types:+$NL}$WT_TYPE"
+        [ "$WT_TYPE" = annotated ] && msgs="$msgs${msgs:+$NL}$WT_MSG" # lightweight tags carry no message
+        [ "$WT_ONTIP" = false ] && offtip=1
+        rows="$rows${rows:+,}{\"path\":\"$jp\",\"type\":\"$WT_TYPE\",\"message\":\"$jm\",\"onMainTip\":$WT_ONTIP}"
+      else
+        robj="$robj,\"tag\":{\"name\":\"$jt\",\"exists\":false}"
+        [ "$opt" = false ] && missing=1
+        rows="$rows${rows:+,}{\"path\":\"$jp\",\"exists\":false}"
+      fi
+    fi
+    repos="$repos${repos:+,}$robj}"
+  done <<<"$entries"
+
+  if [ "$have_tag" = 1 ]; then
+    distinct_count_v n "$types"; [ "$n" -gt 1 ] && reasons="$reasons${reasons:+,}\"type\""
+    distinct_count_v n "$msgs"; [ "$n" -gt 1 ] && reasons="$reasons${reasons:+,}\"message\""
+    [ "$missing" = 1 ] && reasons="$reasons${reasons:+,}\"missing\""
+    [ "$offtip" = 1 ] && reasons="$reasons${reasons:+,}\"not-on-main-tip\""
+    if [ -n "$reasons" ]; then
+      json_arr_v FIX "compare: git -C <repo> for-each-ref --format='%(objecttype) %(*objectname) %(contents:subject)' refs/tags/$WS_TAG" "recreate the odd one out only after the team agrees (tags are shared history)"
+      fail_check tag-convention-drift warning "tag $WS_TAG differs across the workspace" \
+        "\"tag\":\"$jt\",\"reasons\":[$reasons],\"repos\":[$rows]" "$FIX" tag-convention-drift high "$WS_TAG"
+    fi
+  fi
+  while IFS= read -r line; do [ -n "$line" ] && joined="$joined${joined:+,}$line"; done <<<"$FINDINGS"
+  local ready=true jf jpol
+  { [ "$WORST" -ge 2 ] || [ "$ws_crit" = 1 ]; } && ready=false
+  json_str_v jf "$file"; json_str_v jpol "$WS_POLICY"
+  printf '{"gitflowDoctor":"%s","workspace":{"file":"%s","pushPolicy":"%s","ready":%s,"repos":[%s],"findings":[%s]}}\n' \
+    "$DOCTOR_VERSION" "$jf" "$jpol" "$ready" "$repos" "$joined"
+  [ "$ws_crit" = 1 ] && [ "$WORST" -lt 3 ] && WORST=3
+  case "$WORST" in 3) exit 2 ;; 2) exit 1 ;; *) exit 0 ;; esac
+}
+[ -n "$WORKSPACE" ] && run_workspace
+
 # ---------------------------------------------------------------------------
 # Repo bootstrap: one rev-parse batch answers repo/root/shallow at once
 # ---------------------------------------------------------------------------
@@ -533,7 +743,7 @@ SHALLOW=0; [ "$_shallow" = true ] && SHALLOW=1
 # zero-spawn scan of the scalar keys the doctor understands; the agent passes
 # everything as flags, which always win. Several keys may share one line.
 CONFIG_FILE="$REPO_ROOT/.gitflow.json"
-CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
+CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula|scheme|hotfixPattern)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
 if [ -f "$CONFIG_FILE" ]; then
   CFG_CL_BLOCK=0; CFG_CL_FILE=""; CFG_CL_ENABLED=true
   while IFS= read -r line || [ -n "$line" ]; do
@@ -555,6 +765,8 @@ if [ -f "$CONFIG_FILE" ]; then
         signedTags) [ "$val" = true ] && REQUIRE_SIGNED_TAGS=1 ;;
         tap) [ -z "$HOMEBREW_TAP" ] && HOMEBREW_TAP=$val ;;
         formula) [ -z "$HOMEBREW_FORMULA" ] && HOMEBREW_FORMULA=$val ;;
+        scheme) [ -z "$VERSION_SCHEME" ] && VERSION_SCHEME=$val ;;
+        hotfixPattern) [ -z "$HOTFIX_PATTERN" ] && HOTFIX_PATTERN=$val ;;
       esac
     done
   done <"$CONFIG_FILE"
@@ -569,6 +781,19 @@ fi
 [ -z "$SCAN_DEPTH" ] && SCAN_DEPTH=200
 [ -z "$MAX_RELEASES" ] && MAX_RELEASES=1
 [ "$ALLOW_PRERELEASE" = 1 ] && RELEASE_NAME_RE=$RELEASE_NAME_PRE_RE
+case "$VERSION_SCHEME" in
+  ''|semver) VERSION_SCHEME=semver ;;
+  suffix-counter)
+    # {base}<infix>{n}: the infix must turn X.Y.Z into a SemVer prerelease
+    # (leading '-') and must not end in a digit, or N would be ambiguous
+    [ -z "$HOTFIX_PATTERN" ] && HOTFIX_PATTERN='{base}-hotfix.{n}'
+    case "$HOTFIX_PATTERN" in
+      "{base}"*"{n}") HOTFIX_INFIX=${HOTFIX_PATTERN#"{base}"}; HOTFIX_INFIX=${HOTFIX_INFIX%"{n}"} ;;
+    esac
+    [[ $HOTFIX_INFIX =~ ^-[0-9A-Za-z.-]*[A-Za-z.-]$ ]] \
+      || die_usage "--hotfix-pattern must look like {base}-hotfix.{n} (got '$HOTFIX_PATTERN')" ;;
+  *) die_usage "versionScheme.scheme must be semver or suffix-counter (got '$VERSION_SCHEME')" ;;
+esac
 
 # git version gate for merge-tree (needs >= 2.38); parsed without spawning sed
 GITV=""
@@ -718,15 +943,67 @@ is_semver_tag() { # tag name including prefix
   [[ $s =~ $SEMVER_RE ]]
 }
 
-semver_le() { # a b (bare x.y.z[-pre]) -> a <= b, numeric fields only
-  local a1 a2 a3 b1 b2 b3
-  IFS=. read -r a1 a2 a3 <<<"${1%%[-+]*}"
-  IFS=. read -r b1 b2 b3 <<<"${2%%[-+]*}"
-  a1=${a1:-0}; a2=${a2:-0}; a3=${a3:-0}; b1=${b1:-0}; b2=${b2:-0}; b3=${b3:-0}
-  [ "$a1" -ne "$b1" ] && { [ "$a1" -lt "$b1" ]; return; }
-  [ "$a2" -ne "$b2" ] && { [ "$a2" -lt "$b2" ]; return; }
-  [ "$a3" -le "$b3" ]
+# ---------------------------------------------------------------------------
+# Version precedence, computed in bash: strict SemVer 2.0, plus the
+# suffix-counter scheme where X.Y.Z<infix>N is a POST-release of X.Y.Z (after
+# X.Y.Z, before X.Y.Z+1; N numeric). git's version sort is never trusted for
+# this — `versionsort.suffix` in the user's config reorders prereleases.
+# ---------------------------------------------------------------------------
+VCMP=0
+num_cmp() { # a b (decimal strings) -> VCMP
+  if [ "$1" -lt "$2" ]; then VCMP=-1; elif [ "$1" -gt "$2" ]; then VCMP=1; else VCMP=0; fi
 }
+prerelease_cmp() { # a b (dot-separated identifiers) -> VCMP, SemVer rule 11
+  local ra="$1." rb="$2." ia ib
+  while :; do
+    if [ -z "$ra" ] && [ -z "$rb" ]; then VCMP=0; return; fi
+    [ -z "$ra" ] && { VCMP=-1; return; }
+    [ -z "$rb" ] && { VCMP=1; return; }
+    ia=${ra%%.*}; ra=${ra#*.}; ib=${rb%%.*}; rb=${rb#*.}
+    if [[ $ia =~ ^[0-9]+$ ]]; then
+      [[ $ib =~ ^[0-9]+$ ]] || { VCMP=-1; return; }
+      num_cmp "$ia" "$ib"; [ "$VCMP" != 0 ] && return
+    elif [[ $ib =~ ^[0-9]+$ ]]; then VCMP=1; return
+    elif [[ $ia < $ib ]]; then VCMP=-1; return
+    elif [[ $ia > $ib ]]; then VCMP=1; return
+    fi
+  done
+}
+counter_version_parts() { # version -> 0 + CV_BASE/CV_N when it is X.Y.Z<infix>N
+  [ -n "$HOTFIX_INFIX" ] || return 1
+  case "$1" in *"$HOTFIX_INFIX"*) : ;; *) return 1 ;; esac
+  CV_BASE=${1%"$HOTFIX_INFIX"*}; CV_N=${1##*"$HOTFIX_INFIX"}
+  [[ $CV_BASE =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ $CV_N =~ ^[0-9]+$ ]]
+}
+CV_BASE=""; CV_N=""
+ver_parts() { # prefix version -> <prefix>Maj Min Pat Kind(-1 pre, 0 release, 1 post) Rest
+  local __vp_s=${2%%+*} __vp_core __vp_rest="" __vp_kind=0 __vp_a __vp_b __vp_c
+  case "$__vp_s" in
+    *-*) __vp_core=${__vp_s%%-*}; __vp_rest=${__vp_s#*-}; __vp_kind=-1 ;;
+    *) __vp_core=$__vp_s ;;
+  esac
+  if counter_version_parts "$__vp_s"; then __vp_core=$CV_BASE; __vp_rest=$CV_N; __vp_kind=1; fi
+  IFS=. read -r __vp_a __vp_b __vp_c <<<"$__vp_core"
+  printf -v "${1}Maj" '%s' "${__vp_a:-0}"
+  printf -v "${1}Min" '%s' "${__vp_b:-0}"
+  printf -v "${1}Pat" '%s' "${__vp_c:-0}"
+  printf -v "${1}Kind" '%s' "$__vp_kind"
+  printf -v "${1}Rest" '%s' "${__vp_rest:-0}"
+}
+# shellcheck disable=SC2154 # _va*/_vb* are assigned via printf -v inside ver_parts
+version_cmp() { # a b (bare versions, no tag prefix) -> VCMP -1/0/1
+  ver_parts _va "$1"; ver_parts _vb "$2"
+  num_cmp "$_vaMaj" "$_vbMaj"; [ "$VCMP" != 0 ] && return
+  num_cmp "$_vaMin" "$_vbMin"; [ "$VCMP" != 0 ] && return
+  num_cmp "$_vaPat" "$_vbPat"; [ "$VCMP" != 0 ] && return
+  num_cmp "$_vaKind" "$_vbKind"; [ "$VCMP" != 0 ] && return
+  case "$_vaKind" in
+    -1) prerelease_cmp "$_vaRest" "$_vbRest" ;;
+    1) num_cmp "$_vaRest" "$_vbRest" ;;
+    *) VCMP=0 ;;
+  esac
+}
+version_le() { version_cmp "$1" "$2"; [ "$VCMP" != 1 ]; }
 
 # merged-into-main tag list (one git call) -> latest/oldest semver + membership
 MERGED_TAGS=""
@@ -734,13 +1011,46 @@ LATEST_TAG=""
 OLDEST_TAG=""
 if [ -n "$R_MAIN" ]; then
   capture_all MERGED_TAGS git tag --list --merged "$R_MAIN" --sort=-version:refname
+  latest_v=""; oldest_v=""
   while IFS= read -r t; do
     [ -z "$t" ] && continue
-    if is_semver_tag "$t"; then
-      [ -z "$LATEST_TAG" ] && LATEST_TAG=$t
-      OLDEST_TAG=$t
+    is_semver_tag "$t" || continue
+    v=${t#"$TAG_PREFIX"}
+    if [ -z "$LATEST_TAG" ]; then
+      LATEST_TAG=$t; OLDEST_TAG=$t; latest_v=$v; oldest_v=$v
+      continue
     fi
+    version_cmp "$v" "$latest_v"; [ "$VCMP" = 1 ] && { LATEST_TAG=$t; latest_v=$v; }
+    version_cmp "$v" "$oldest_v"; [ "$VCMP" = -1 ] && { OLDEST_TAG=$t; oldest_v=$v; }
   done <<<"$MERGED_TAGS"
+fi
+
+# next hotfix version: above the latest tag AND above every open hotfix branch
+# on the same line (their numbers are taken even before they are tagged)
+NEXT_HOTFIX=""
+[ -n "$LATEST_TAG" ] && ver_parts _nh "${LATEST_TAG#"$TAG_PREFIX"}"
+# a prerelease as the latest tag means X.Y.Z itself never shipped: there is
+# nothing to hotfix yet, so no suggestion (the agent asks the user)
+# shellcheck disable=SC2154 # _nh* are assigned via printf -v inside ver_parts
+if [ -n "$LATEST_TAG" ] && [ "$_nhKind" != -1 ]; then
+  nh_hot=""; list_branches_v nh_hot "${HOTFIX_PREFIX}*"
+  if [ "$VERSION_SCHEME" = suffix-counter ]; then
+    nh_base="$_nhMaj.$_nhMin.$_nhPat"; nh_n=0
+    [ "$_nhKind" = 1 ] && nh_n=$_nhRest
+    while IFS= read -r br; do
+      counter_version_parts "${br#"$HOTFIX_PREFIX"}" || continue
+      [ "$CV_BASE" = "$nh_base" ] && [ "$CV_N" -gt "$nh_n" ] && nh_n=$CV_N
+    done <<<"$nh_hot"
+    NEXT_HOTFIX="$nh_base$HOTFIX_INFIX$((10#$nh_n + 1))"
+  else
+    nh_p=$_nhPat
+    while IFS= read -r br; do
+      v=${br#"$HOTFIX_PREFIX"}
+      [[ $v =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || continue
+      [ "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" = "$_nhMaj.$_nhMin" ] && [ "${BASH_REMATCH[3]}" -gt "$nh_p" ] && nh_p=${BASH_REMATCH[3]}
+    done <<<"$nh_hot"
+    NEXT_HOTFIX="$_nhMaj.$_nhMin.$((10#$nh_p + 1))"
+  fi
 fi
 tag_on_main() { # tag name — membership in the merged-into-main list
   local t
@@ -796,6 +1106,66 @@ open_releases_v() { # varname newline-list -> entries that have NOT shipped yet
 conflicts_predicted() { # ref_a ref_b
   [ "$MERGETREE_OK" = 1 ] || return 1
   ! git merge-tree --write-tree --no-messages "$1" "$2" >/dev/null 2>&1
+}
+
+merge_conflicts_v() { # varname ref_a ref_b -> newline list of paths the merge would conflict on
+  # One merge-tree call; output is the tree oid, then one conflicted path per
+  # line. Empty when clean, when merge-tree is unavailable, or on error.
+  local __mc_v=$1 __mc_out="" __mc_line __mc_acc="" __mc_first=1
+  clear_v "$__mc_v"
+  [ "$MERGETREE_OK" = 1 ] || return 0
+  capture_all __mc_out git merge-tree --write-tree --name-only --no-messages "$2" "$3"
+  while IFS= read -r __mc_line; do
+    if [ "$__mc_first" = 1 ]; then __mc_first=0; continue; fi
+    [ -z "$__mc_line" ] && continue
+    case "$NL$__mc_acc$NL" in *"$NL$__mc_line$NL"*) continue ;; esac
+    __mc_acc="$__mc_acc${__mc_acc:+$NL}$__mc_line"
+  done <<<"$__mc_out"
+  [ -n "$__mc_acc" ] && printf -v "$__mc_v" '%s' "$__mc_acc"
+  return 0
+}
+
+json_lines_v() { # varname newline-list -> JSON array of strings
+  local __jl_v=$1 __jl_line __jl_e __jl_out=""
+  while IFS= read -r __jl_line; do
+    [ -z "$__jl_line" ] && continue
+    json_str_v __jl_e "$__jl_line"
+    __jl_out="$__jl_out${__jl_out:+,}\"$__jl_e\""
+  done <<<"$2"
+  printf -v "$__jl_v" '[%s]' "$__jl_out"
+}
+
+open_hotfixes_v() { # varname newline-list -> hotfix branches whose tag does not exist yet
+  local __oh_v=$1 __oh_br __oh_out=""
+  while IFS= read -r __oh_br; do
+    [ -z "$__oh_br" ] && continue
+    tag_exists "${TAG_PREFIX}${__oh_br#"$HOTFIX_PREFIX"}" && continue
+    __oh_out="$__oh_out${__oh_out:+$NL}$__oh_br"
+  done <<<"$2"
+  clear_v "$__oh_v"
+  [ -n "$__oh_out" ] && printf -v "$__oh_v" '%s' "$__oh_out"
+  return 0
+}
+
+sort_by_version_v() { # varname newline-list-of-branches prefix -> same list, ascending version
+  local __sv_v=$1 __sv_pfx=$3 __sv_br __sv_out="" __sv_rest __sv_x __sv_new __sv_done
+  while IFS= read -r __sv_br; do
+    [ -z "$__sv_br" ] && continue
+    __sv_new=""; __sv_done=0; __sv_rest=$__sv_out
+    while IFS= read -r __sv_x; do
+      [ -z "$__sv_x" ] && continue
+      if [ "$__sv_done" = 0 ]; then
+        version_cmp "${__sv_br#"$__sv_pfx"}" "${__sv_x#"$__sv_pfx"}"
+        if [ "$VCMP" = -1 ]; then __sv_new="$__sv_new${__sv_new:+$NL}$__sv_br"; __sv_done=1; fi
+      fi
+      __sv_new="$__sv_new${__sv_new:+$NL}$__sv_x"
+    done <<<"$__sv_rest"
+    [ "$__sv_done" = 0 ] && __sv_new="$__sv_new${__sv_new:+$NL}$__sv_br"
+    __sv_out=$__sv_new
+  done <<<"$2"
+  clear_v "$__sv_v"
+  [ -n "$__sv_out" ] && printf -v "$__sv_v" '%s' "$__sv_out"
+  return 0
 }
 
 extract_version_v() { # varname ref path pattern — ERE with capture group 1, one process
@@ -905,8 +1275,15 @@ probe_merged_into() { # branch target_ref
   return 1
 }
 
+PROBE_FORECAST=""
+forecast_warning() { # conflict-list target-name
+  [ -n "$1" ] || return 0
+  local __fw_list=${1//$NL/, }
+  add_probe_warning "conflicts predicted merging $PROBE_BRANCH into $2: $__fw_list — resolve on the branch before the finish (fix-recipes.md#flow-branch-behind-main)"
+}
+
 run_probe() {
-  local tag="${TAG_PREFIX}${PROBE_VERSION}" bref jt jb
+  local tag="${TAG_PREFIX}${PROBE_VERSION}" bref jt jb fc_main="" fc_bm="" fc_dev="" jfm jfb jfd
   branch_ref_v bref "$PROBE_BRANCH"
 
   if [ "$PROBE" = finish-feature ]; then
@@ -917,6 +1294,12 @@ run_probe() {
     fi
     json_str_v jt "$MERGE_VIA"
     add_step merged-to-develop "$MERGED" "\"via\":\"$jt\""
+    if [ "$MERGED" = false ] && [ -n "$bref" ]; then
+      merge_conflicts_v fc_dev "$R_DEV" "$bref"
+      forecast_warning "$fc_dev" "$DEVELOP"
+    fi
+    json_lines_v jfd "$fc_dev"
+    PROBE_FORECAST="\"develop\":$jfd"
   else
     # version-bumped
     if [ "$VF_COUNT" -eq 0 ]; then
@@ -956,6 +1339,22 @@ run_probe() {
     local main_merge_sha=$MERGE_SHA
     json_str_v jt "$MERGE_VIA"
     add_step merged-to-main "$MERGED" "\"sha\":\"$MERGE_SHA\",\"via\":\"$jt\""
+    if [ "$MERGED" = false ] && [ -n "$bref" ] && [ -n "$R_MAIN" ]; then
+      merge_conflicts_v fc_main "$R_MAIN" "$bref"
+      forecast_warning "$fc_main" "$MAIN"
+    fi
+
+    # hotfixes finished out of version order: allowed, but say so
+    if [ "$PROBE" = finish-hotfix ]; then
+      local hot_all="" hot_open="" hb
+      list_branches_v hot_all "${HOTFIX_PREFIX}*"
+      open_hotfixes_v hot_open "$hot_all"
+      while IFS= read -r hb; do
+        [ -z "$hb" ] || [ "$hb" = "$PROBE_BRANCH" ] && continue
+        version_cmp "${hb#"$HOTFIX_PREFIX"}" "$PROBE_VERSION"
+        [ "$VCMP" = -1 ] && add_probe_warning "$hb is still open with a lower version — finishing $PROBE_BRANCH first puts tags and $MAIN merges out of order (allowed; tell the user)"
+      done <<<"$hot_open"
+    fi
 
     # tag-exists (+ divergence guard)
     if tag_exists "$tag"; then
@@ -1026,8 +1425,14 @@ run_probe() {
         add_step back-merged true "\"target\":\"$jb\",\"mode\":\"content\"$extra"
       else
         add_step back-merged false "\"target\":\"$jb\",\"mode\":\"ancestry\"$extra"
+        # before the tag exists the branch stands in for it (merge-branch
+        # semantics; merge-tag usually conflicts less, never more on these paths)
+        merge_conflicts_v fc_bm "$tref" "$src"
+        forecast_warning "$fc_bm" "$bm_target"
       fi
     fi
+    json_lines_v jfm "$fc_main"; json_lines_v jfb "$fc_bm"
+    PROBE_FORECAST="\"main\":$jfm,\"backMerge\":$jfb"
   fi
 
   # remote-branch-deleted
@@ -1078,12 +1483,238 @@ run_probe() {
   fi
 
   json_str_v jb "$PROBE_BRANCH"; json_str_v jt "$PROBE_VERSION"
-  printf '{"gitflowDoctor":"%s","probe":"%s","branch":"%s","version":"%s","steps":[%s],"warnings":[%s]}\n' \
-    "$DOCTOR_VERSION" "$PROBE" "$jb" "$jt" "$PROBE_STEPS" "$PROBE_WARNINGS"
+  printf '{"gitflowDoctor":"%s","probe":"%s","branch":"%s","version":"%s","steps":[%s],"warnings":[%s],"forecast":{%s}}\n' \
+    "$DOCTOR_VERSION" "$PROBE" "$jb" "$jt" "$PROBE_STEPS" "$PROBE_WARNINGS" "$PROBE_FORECAST"
+  exit 0
+}
+
+# ===========================================================================
+# CONVENTIONS MODE — infer the house style from the last finishes on main so
+# `init` can PROPOSE messages / tag settings (the agent writes nothing unasked)
+# ===========================================================================
+CONV_SAMPLE=5
+PRERELEASE_WORDS=" alpha beta rc pre preview dev snapshot canary next nightly "
+
+majority_v() { # varname newline-list -> most frequent line (first seen wins ties)
+  local __mj_v=$1 __mj_a __mj_b __mj_n __mj_best="" __mj_bn=0
+  clear_v "$__mj_v"
+  while IFS= read -r __mj_a; do
+    [ -z "$__mj_a" ] && continue
+    __mj_n=0
+    while IFS= read -r __mj_b; do [ "$__mj_b" = "$__mj_a" ] && __mj_n=$((__mj_n + 1)); done <<<"$2"
+    [ "$__mj_n" -gt "$__mj_bn" ] && { __mj_best=$__mj_a; __mj_bn=$__mj_n; }
+  done <<<"$2"
+  [ -n "$__mj_best" ] && printf -v "$__mj_v" '%s' "$__mj_best"
+  return 0
+}
+
+run_conventions() {
+  local cands="" t v line sorted sampled="" n=0 total=0
+  # candidates: tags on main that look like [v]X.Y.Z[-...]
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    v=${t#v}
+    [[ $v =~ $SEMVER_RE ]] || continue
+    cands="$cands${cands:+$NL}$t"
+  done <<<"$MERGED_TAGS"
+  sort_by_version_v sorted "$cands" v
+  count_lines_v total "$sorted"
+  # the newest CONV_SAMPLE tags
+  local skip=$((total - CONV_SAMPLE)) i=0
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    i=$((i + 1)); [ "$i" -le "$skip" ] && continue
+    sampled="$sampled${sampled:+$NL}$t"; n=$((n + 1))
+  done <<<"$sorted"
+
+  # tag prefix / type / message votes
+  local subj_lines="" pfx_votes="" type_votes="" tagmsg_votes="" tl typ tsub tmpl targets="" rest
+  capture_all subj_lines git for-each-ref --format='%(refname:short)%09%(objecttype)%09%(contents:subject)' refs/tags
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    case "$t" in v[0-9]*) pfx_votes="$pfx_votes${pfx_votes:+$NL}v" ;; *) pfx_votes="$pfx_votes${pfx_votes:+$NL}none" ;; esac
+    tl=""; lookup_line tl "$TAG_LINES" "$t" || :
+    typ=${tl##* }
+    case "$typ" in tag) type_votes="$type_votes${type_votes:+$NL}annotated" ;; *) type_votes="$type_votes${type_votes:+$NL}lightweight" ;; esac
+    rest=${tl#* }; targets="$targets ${rest%% *}"
+    if [ "$typ" = tag ]; then
+      while IFS= read -r line; do
+        case "$line" in "$t"$'\t'*) : ;; *) continue ;; esac
+        tsub=${line#*$'\t'}; tsub=${tsub#*$'\t'}
+        template_v tmpl "$tsub" "" "$t" "${t#v}"
+        tagmsg_votes="$tagmsg_votes${tagmsg_votes:+$NL}$tmpl"
+        break
+      done <<<"$subj_lines"
+    fi
+  done <<<"$sampled"
+
+  # main merges at the tag targets, and develop merges that took them back
+  local main_info="" dev_merges="" main_votes="" bm_votes="" strat_votes=""
+  if [ -n "${targets// /}" ]; then
+    # shellcheck disable=SC2086 # targets are shas, split on purpose
+    capture_all main_info git log --no-walk=unsorted --format='%H %P%x09%s' $targets
+  fi
+  [ -n "$R_DEV" ] && capture_all dev_merges git log --first-parent --merges -n "$SCAN_DEPTH" --format='%H %P%x09%s' "$R_DEV"
+  local m p2 msub br ver dline dp2 dsub
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    tl=""; lookup_line tl "$TAG_LINES" "$t" || :
+    rest=${tl#* }; m=${rest%% *}
+    ver=${t#v}
+    line=""
+    while IFS= read -r line; do case "$line" in "$m "*) break ;; esac; line=""; done <<<"$main_info"
+    [ -z "$line" ] && continue
+    msub=${line#*$'\t'}; line=${line%%$'\t'*}
+    # shellcheck disable=SC2086 # shas split on purpose
+    set -- $line
+    [ $# -ge 3 ] || continue # the tag target is not a merge commit
+    p2=$3
+    br=""
+    case "$msub" in
+      *"$HOTFIX_PREFIX$ver"*) br="$HOTFIX_PREFIX$ver" ;;
+      *"$RELEASE_PREFIX$ver"*) br="$RELEASE_PREFIX$ver" ;;
+    esac
+    template_v tmpl "$msub" "$br" "$t" "$ver"
+    main_votes="$main_votes${main_votes:+$NL}$tmpl"
+    while IFS= read -r dline; do
+      [ -z "$dline" ] && continue
+      dsub=${dline#*$'\t'}; dline=${dline%%$'\t'*}
+      # shellcheck disable=SC2086 # shas split on purpose
+      set -- $dline
+      [ $# -ge 3 ] || continue
+      dp2=$3
+      if [ "$dp2" = "$m" ]; then strat_votes="$strat_votes${strat_votes:+$NL}merge-tag"
+      elif [ "$dp2" = "$p2" ]; then strat_votes="$strat_votes${strat_votes:+$NL}merge-branch"
+      else continue; fi
+      template_v tmpl "$dsub" "$br" "$t" "$ver"
+      bm_votes="$bm_votes${bm_votes:+$NL}$tmpl"
+      break
+    done <<<"$dev_merges"
+  done <<<"$sampled"
+
+  # version scheme: a non-prerelease word used as X.Y.Z-<word>.N at least twice
+  local words="" w scheme_json='{"scheme":"semver"}' wbest=""
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    v=${t#v}
+    [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+-([A-Za-z]+)\.[0-9]+$ ]] || continue
+    w=${BASH_REMATCH[1]}
+    case "$PRERELEASE_WORDS" in *" $w "*) continue ;; esac
+    words="$words${words:+$NL}$w"
+  done <<<"$sorted"
+  majority_v wbest "$words"
+  if [ -n "$wbest" ]; then
+    local wn=0; while IFS= read -r w; do [ "$w" = "$wbest" ] && wn=$((wn + 1)); done <<<"$words"
+    [ "$wn" -ge 2 ] && scheme_json="{\"scheme\":\"suffix-counter\",\"hotfixPattern\":\"{base}-$wbest.{n}\"}"
+  fi
+
+  local out="" best j msgs=""
+  json_str_v j "$MAIN"; out="\"main\":\"$j\",\"sampled\":$n"
+  majority_v best "$pfx_votes"
+  case "$best" in v) out="$out,\"tagPrefix\":\"v\"" ;; none) out="$out,\"tagPrefix\":\"\"" ;; esac
+  majority_v best "$type_votes"; [ -n "$best" ] && out="$out,\"tagType\":\"$best\""
+  majority_v best "$main_votes"; [ -n "$best" ] && { json_str_v j "$best"; msgs="\"mergeToMain\":\"$j\""; }
+  majority_v best "$bm_votes"; [ -n "$best" ] && { json_str_v j "$best"; msgs="$msgs${msgs:+,}\"backMerge\":\"$j\""; }
+  majority_v best "$tagmsg_votes"; [ -n "$best" ] && { json_str_v j "$best"; msgs="$msgs${msgs:+,}\"tag\":\"$j\""; }
+  out="$out,\"messages\":{$msgs}"
+  majority_v best "$strat_votes"; [ -n "$best" ] && out="$out,\"backmergeStrategy\":\"$best\""
+  out="$out,\"versionScheme\":$scheme_json"
+  printf '{"gitflowDoctor":"%s","conventions":{%s}}\n' "$DOCTOR_VERSION" "$out"
   exit 0
 }
 
 [ -n "$PROBE" ] && run_probe
+[ "$CONVENTIONS" = 1 ] && run_conventions
+
+# ===========================================================================
+# MERGE-PROOF MODE — evidence for a staged conflict resolution (read-only)
+# ===========================================================================
+diff_body_v() { # varname git-diff-args... -> the +/- lines after the first hunk header
+  local __db_v=$1 __db_out="" __db_line __db_acc="" __db_in=0; shift
+  capture_all __db_out git diff -U0 --no-color --no-ext-diff --no-textconv "$@"
+  while IFS= read -r __db_line; do
+    case "$__db_line" in "@@"*) __db_in=1; continue ;; esac
+    [ "$__db_in" = 1 ] || continue
+    case "$__db_line" in [+-]*) __db_acc="$__db_acc$NL$__db_line" ;; esac
+  done <<<"$__db_out"
+  clear_v "$__db_v"
+  [ -n "$__db_acc" ] && printf -v "$__db_v" '%s' "$__db_acc"
+  return 0
+}
+
+text_stats() { # content -> TS_LINES TS_CR TS_BOM(true/false) TS_MARKERS(true/false)
+  local __ts_line __ts_first=1
+  TS_LINES=0; TS_CR=0; TS_BOM=false; TS_MARKERS=false
+  while IFS= read -r __ts_line || [ -n "$__ts_line" ]; do
+    TS_LINES=$((TS_LINES + 1))
+    if [ "$__ts_first" = 1 ]; then
+      __ts_first=0
+      case "$__ts_line" in $'\xef\xbb\xbf'*) TS_BOM=true ;; esac
+    fi
+    case "$__ts_line" in *$'\r') TS_CR=$((TS_CR + 1)); __ts_line=${__ts_line%$'\r'} ;; esac
+    case "$__ts_line" in '<<<<<<<'|'<<<<<<< '*|'======='|'>>>>>>>'|'>>>>>>> '*|'|||||||'|'||||||| '*) TS_MARKERS=true ;; esac
+  done <<<"$1"
+}
+
+validator_for() { # path -> VALIDATOR (xml|json|yaml|"")
+  case "$1" in
+    *.xml|*.config|*.csproj|*.vbproj|*.fsproj|*.props|*.targets|*.resx|*.xaml|*.svg) VALIDATOR=xml ;;
+    *.json) VALIDATOR=json ;;
+    *.yml|*.yaml) VALIDATOR=yaml ;;
+    *) VALIDATOR="" ;;
+  esac
+}
+
+run_merge_proof() {
+  local theirs="" ours="" base="" paths="" unmerged="" line f files="" jf state
+  capture theirs git rev-parse -q --verify MERGE_HEAD
+  if [ -z "$theirs" ]; then
+    printf '{"gitflowDoctor":"%s","mergeProof":{"merging":false}}\n' "$DOCTOR_VERSION"
+    exit 0
+  fi
+  capture ours git rev-parse -q --verify HEAD
+  capture base git merge-base "$ours" "$theirs"
+  merge_conflicts_v paths "$ours" "$theirs"
+  capture_all unmerged git ls-files -u
+  while IFS= read -r line; do # "mode sha stage<TAB>path": keep conflicted paths merge-tree may not name
+    [ -z "$line" ] && continue
+    f=${line#*$'\t'}
+    case "$NL$paths$NL" in *"$NL$f$NL"*) : ;; *) paths="$paths${paths:+$NL}$f" ;; esac
+  done <<<"$unmerged"
+
+  local their_change our_change ours_to_res theirs_to_res res_txt ours_txt a b m e bom v
+  local ours_lines ours_cr ours_bom
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    json_str_v jf "$f"
+    case "$NL$unmerged" in *$'\t'"$f$NL"*|*$'\t'"$f") state=unresolved ;; *) state=resolved ;; esac
+    if [ "$state" = unresolved ]; then
+      files="$files${files:+,}{\"path\":\"$jf\",\"state\":\"unresolved\",\"verdict\":\"unresolved\"}"
+      continue
+    fi
+    diff_body_v their_change "$base" "$theirs" -- "$f"
+    diff_body_v our_change "$base" "$ours" -- "$f"
+    diff_body_v ours_to_res --cached "$ours" -- "$f"
+    diff_body_v theirs_to_res --cached "$theirs" -- "$f"
+    a=false; [ "$ours_to_res" = "$their_change" ] && a=true
+    b=false; [ "$theirs_to_res" = "$our_change" ] && b=true
+    capture_all ours_txt git show "$ours:$f"
+    capture_all res_txt git show ":0:$f"
+    text_stats "$ours_txt"; ours_lines=$TS_LINES; ours_cr=$TS_CR; ours_bom=$TS_BOM
+    text_stats "$res_txt"; m=$TS_MARKERS
+    e=false
+    if { [ "$ours_cr" -eq 0 ] && [ "$TS_CR" -eq 0 ]; } || { [ "$ours_cr" -eq "$ours_lines" ] && [ "$TS_CR" -eq "$TS_LINES" ]; }; then e=true; fi
+    bom=false; [ "$ours_bom" = "$TS_BOM" ] && bom=true
+    validator_for "$f"
+    v=review
+    [ "$a" = true ] && [ "$b" = true ] && [ "$m" = false ] && [ "$e" = true ] && [ "$bom" = true ] && v=consistent
+    files="$files${files:+,}{\"path\":\"$jf\",\"state\":\"resolved\",\"oursPlusTheirChange\":$a,\"theirsPlusOurChange\":$b,\"markers\":$m,\"eolPreserved\":$e,\"bomPreserved\":$bom,\"validator\":\"$VALIDATOR\",\"verdict\":\"$v\"}"
+  done <<<"$paths"
+  printf '{"gitflowDoctor":"%s","mergeProof":{"merging":true,"ours":"%s","theirs":"%s","base":"%s","files":[%s]}}\n' \
+    "$DOCTOR_VERSION" "$ours" "$theirs" "$base" "$files"
+  exit 0
+}
+[ "$MERGE_PROOF" = 1 ] && run_merge_proof
 
 # ===========================================================================
 # CHECKS
@@ -1240,7 +1871,7 @@ if any_enabled sync-behind sync-ahead sync-diverged; then
 fi
 
 # --- A.4 topology + A.5/A.6 checks that need both branches -------------------
-TOPO_IDS="missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift multiple-release-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main branch-stale-merged branch-stale-inactive"
+TOPO_IDS="missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift flow-branch-behind-main multiple-release-branches multiple-hotfix-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main branch-stale-merged branch-stale-inactive"
 if [ -z "$R_MAIN" ] || [ -z "$R_DEV" ]; then
   for id in $TOPO_IDS; do skip_check "$id" "missing-main-or-develop"; done
 else
@@ -1451,6 +2082,70 @@ else
     [ "$drift_found" = 0 ] && ok_check release-develop-drift
   fi
 
+  # open release/hotfix branches that main moved past: forecast both finish legs
+  OPEN_HOTFIXES=""; open_hotfixes_v OPEN_HOTFIXES "$HOTFIXES"
+  FB_FACTS="" # br US behind US main-conflicts-json (reused by multiple-hotfix-branches)
+  if any_enabled flow-branch-behind-main multiple-hotfix-branches; then
+    fb_found=0
+    while IFS= read -r br; do
+      [ -z "$br" ] && continue
+      branch_ref_v ref "$br"; [ -z "$ref" ] && continue
+      behind=""
+      capture behind git rev-list --count "$ref..$R_MAIN"
+      behind=${behind:-0}
+      mc=""; dc=""
+      if [ "$behind" -gt 0 ]; then
+        merge_conflicts_v mc "$R_MAIN" "$ref"
+        merge_conflicts_v dc "$R_DEV" "$ref"
+      fi
+      json_lines_v MCJ "$mc"; json_lines_v DCJ "$dc"
+      FB_FACTS="$FB_FACTS${FB_FACTS:+$NL}$br$US$behind$US$MCJ"
+      [ "$behind" -gt 0 ] || continue
+      fb_found=1
+      sev=info; title="$br is $behind commit(s) behind $MAIN"
+      if [ -n "$mc$dc" ]; then
+        sev=warning; count_lines_v nconf "$mc$NL$dc"
+        # shellcheck disable=SC2154 # nconf is assigned via printf -v inside count_lines_v
+        title="$title — its finish would conflict ($nconf path(s); resolve on the branch first)"
+      fi
+      json_str_v J "$br"
+      json_arr_v FIX "git switch $br && git merge origin/$MAIN" "resolve on $br (its author knows the change), then: git push origin $br"
+      fail_check flow-branch-behind-main "$sev" "$title" \
+        "\"branch\":\"$J\",\"behind\":$behind,\"conflicts\":{\"main\":$MCJ,\"develop\":$DCJ}" \
+        "$FIX" flow-branch-behind-main "$ANCESTRY_CONF" "$br"
+    done <<<"$OPEN_HOTFIXES$NL$OPEN_RELEASES"
+    [ "$fb_found" = 0 ] && ok_check flow-branch-behind-main
+  fi
+
+  # several open hotfixes: show base, lag and conflicts in finish order
+  if any_enabled multiple-hotfix-branches; then
+    hot_count=0
+    count_lines_v hot_count "$OPEN_HOTFIXES"
+    if [ "$hot_count" -gt 1 ]; then
+      sort_by_version_v SORTED_HOT "$OPEN_HOTFIXES" "$HOTFIX_PREFIX"
+      HOT_ARR=""; first_hot=""
+      while IFS= read -r br; do
+        [ -z "$br" ] && continue
+        [ -z "$first_hot" ] && first_hot=$br
+        branch_ref_v ref "$br"
+        base=""
+        [ -n "$ref" ] && capture base git describe --tags --abbrev=0 --match "${TAG_PREFIX}[0-9]*" "$ref"
+        fact=""; behind=0; MCJ="[]"
+        while IFS= read -r fact; do
+          case "$fact" in "$br$US"*) fact=${fact#*"$US"}; behind=${fact%%"$US"*}; MCJ=${fact#*"$US"}; break ;; esac
+        done <<<"$FB_FACTS"
+        json_str_v J "$br"; json_str_v JV "${br#"$HOTFIX_PREFIX"}"; json_str_v JB "$base"
+        HOT_ARR="$HOT_ARR${HOT_ARR:+,}{\"branch\":\"$J\",\"version\":\"$JV\",\"base\":\"$JB\",\"behind\":$behind,\"mainConflicts\":$MCJ}"
+      done <<<"$SORTED_HOT"
+      json_str_v J "$first_hot"
+      json_arr_v FIX "finish in version order, starting with $first_hot" "a branch behind $MAIN: merge $MAIN into it first (flow-branch-behind-main)"
+      fail_check multiple-hotfix-branches info "$hot_count hotfix branches open at once — finish order matters" \
+        "\"branches\":[$HOT_ARR],\"finishFirst\":\"$J\"" "$FIX" multiple-hotfix-branches
+    else
+      ok_check multiple-hotfix-branches
+    fi
+  fi
+
   if any_enabled orphaned-release-branch orphaned-hotfix-branch release-version-collision; then
     orph_found=0
     coll_found=0
@@ -1475,12 +2170,14 @@ else
           "\"branch\":\"$J\",\"tag\":\"$JT\"" "$FIX" orphaned-release-branch high "$br"
         continue
       fi
-      if [ "$kind" = release ] && [ -n "$LATEST_TAG" ] && [[ $ver =~ $SEMVER_RE ]]; then
+      if [ -n "$LATEST_TAG" ] && [[ $ver =~ $SEMVER_RE ]]; then
         latest_ver=${LATEST_TAG#"$TAG_PREFIX"}
-        if semver_le "$ver" "$latest_ver"; then
+        if version_le "$ver" "$latest_ver"; then
           coll_found=1
+          pfx=$RELEASE_PREFIX; [ "$kind" = hotfix ] && pfx=$HOTFIX_PREFIX
+          nv="<next-version>"; [ "$kind" = hotfix ] && [ -n "$NEXT_HOTFIX" ] && nv=$NEXT_HOTFIX
           json_str_v J "$br"; json_str_v JT "$LATEST_TAG"
-          json_arr_v FIX "git branch -m $br ${RELEASE_PREFIX}<next-version>" "git push origin :$br ${RELEASE_PREFIX}<next-version>"
+          json_arr_v FIX "git branch -m $br $pfx$nv" "git push origin :$br $pfx$nv"
           fail_check release-version-collision warning "$br targets version $ver but $LATEST_TAG is already released" \
             "\"branch\":\"$J\",\"latestTag\":\"$JT\"" "$FIX" release-version-collision high "$br"
         fi
@@ -1775,7 +2472,8 @@ if any_enabled branch-bad-version-name; then
     ver=""
     case "$br" in
       "$RELEASE_PREFIX"*) ver=${br#"$RELEASE_PREFIX"} ;;
-      "$HOTFIX_PREFIX"*) ver=${br#"$HOTFIX_PREFIX"} ;;
+      "$HOTFIX_PREFIX"*) ver=${br#"$HOTFIX_PREFIX"}
+        counter_version_parts "$ver" && continue ;; # suffix-counter hotfix names are first-class
       *) continue ;;
     esac
     if ! [[ $ver =~ $RELEASE_NAME_RE ]]; then

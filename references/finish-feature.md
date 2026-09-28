@@ -21,7 +21,8 @@ git merge --ff-only origin/develop
 git merge --no-ff feature/<name> -m "Merge feature/<name> into develop"
 git push origin develop
 ```
-Conflicts: features may conflict with develop in source files — resolve
+Conflicts: the probe's `forecast.develop` names them before you merge — show
+it to the user first. Features may conflict with develop in source files — resolve
 interactively with the user (never silently), or abort cleanly and suggest
 rebasing the feature first (`git rebase origin/develop feature/<name>`).
 

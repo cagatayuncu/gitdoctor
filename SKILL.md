@@ -34,6 +34,7 @@ tags `vX.Y.Z` on main).
 | `gitdoctor cleanup` | Stale-branch cleanup (below) |
 | `gitdoctor explain <check-id>` | `bash <skill-dir>/scripts/gitflow-doctor.sh --explain <check-id>` — print the recipe verbatim |
 | `gitdoctor baseline` | Adopt today's findings as ignore entries (below) |
+| `gitdoctor workspace status\|finish <branch>` / "all three repos" | references/workspace.md (`--workspace .gitflow-workspace.json`) |
 
 On `finish` with no arguments: read the current branch. `feature/*` →
 finish-feature; `release/*` → finish-release; `hotfix/*` → finish-hotfix;
@@ -50,7 +51,8 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --format json [flags]
   `--feature-prefix`, `--release-prefix`, `--hotfix-prefix`,
   `--backmerge-prefix`, `--stale-days`, `--scan-depth`, `--max-releases`,
   `--merge-mode`, `--ignore-branches`, `--ignore-tags`, `--ignore-shas`,
-  `--ignore-findings`, `--allow-prerelease`, and one
+  `--ignore-findings`, `--allow-prerelease`, `--version-scheme <versionScheme.scheme>`
+  and `--hotfix-pattern <versionScheme.hotfixPattern>` when set, and one
   `--version-file <path> --version-pattern <ERE>` pair per configured version
   file (pattern = POSIX ERE, capture group 1 is the version), plus
   `--changelog <changelog.file>` unless `changelog.enabled` is false (default:
@@ -62,7 +64,9 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --format json [flags]
   run it again with `--format text` (terminal) or `--format markdown` (PR
   descriptions, issues) and show that output verbatim instead of retyping
   findings. `--format sarif` feeds code scanning; `--format baseline` feeds the
-  Baseline flow. `--list-checks` prints every id; `--explain <id>` a recipe.
+  Baseline flow. `--list-checks` prints every id; `--explain <id>` a recipe;
+  `--conventions` infers tag/message/back-merge style from history (init);
+  `--merge-proof` gives evidence for a staged conflict resolution.
   Probes always emit JSON.
 - Exit codes: 0 clean/info, 1 warnings, 2 criticals, 4 usage error.
 - Findings carry `fix.commands` and `fix.recipeRef` into
@@ -109,7 +113,10 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --probe finish-release --branch relea
 (`finish-hotfix`, `finish-feature` likewise; feature takes no `--version`.)
 Steps report `done:true/false` with evidence. Skip done steps, execute the
 first pending one, re-probe after each mutation. Details per flow in the
-finish references. Probe `warnings` are STOP signals (tag divergence).
+finish references. Probe `warnings` about tag divergence are STOP signals;
+conflict-forecast and hotfix-order warnings are shown to the user before any
+merge. The probe's `forecast` object lists the paths each pending merge leg
+would conflict on — surface it before merging, never discover it mid-merge.
 `--dry-run` from the user → see Dry-run contract below.
 
 ## Dry-run contract
@@ -134,9 +141,13 @@ it. The mutating set is exactly:
 ## Status
 
 Run the full doctor once, then present: current branch + type, ahead/behind
-for main/develop, open flow branches, latest tag, suggested next version
+for main/develop, open flow branches, latest tag (`repo.versions.latestTag` —
+never re-derive it with `git tag --sort`, which obeys the user's
+`versionsort.suffix`), suggested next version
 (references/start-and-init.md § Version suggestion), open PRs
-(`gh pr list --state open` when gh available), and any findings.
+(`gh pr list --state open` when gh available), and any findings. With
+several hotfixes open, render `multiple-hotfix-branches` `data.branches` as a
+table in finish order (`branch  base=<tag>  behind=<n>  conflict:<paths>|clean`).
 
 ## Cleanup
 
@@ -171,7 +182,9 @@ one by one, keep tomorrow's loud.
 1. Never force-push `main`, `develop`, or any tag. `--force-with-lease` is
    allowed only on the user's own feature branch after a rebase they asked for.
 2. Never resolve source-file merge conflicts silently — walk the user through
-   (policy: references/finish-release.md § Back-merge conflicts).
+   (policy: references/finish-release.md § Back-merge conflicts). A proposed
+   resolution is committed only with `--merge-proof` evidence shown and the
+   user's explicit yes.
 3. Never leave a merge half-done: every exit path commits or aborts
    (`operation-in-progress` is the backstop).
 4. Never let `gh release create` create the tag — tag first, push, then
@@ -191,4 +204,5 @@ one by one, keep tomorrow's loud.
 - references/finish-feature.md — feature finish
 - references/fix-recipes.md — every doctor finding, one recipe each
 - references/config.md — .gitflow.json schema
+- references/workspace.md — several repos in lockstep (.gitflow-workspace.json)
 - references/version-files.md — version-file preset patterns

@@ -147,6 +147,33 @@ expects this; the finish back-merge reconciles it. If
 `git merge-tree --write-tree --name-only origin/develop origin/release/X.Y.Z`
 and plan the resolution before finish day.
 
+## flow-branch-behind-main
+An open hotfix or release branch lacks commits that are already on main —
+typically a second hotfix cut before the first one finished. `data.conflicts`
+lists the paths each finish leg would conflict on (`main`: the merge into
+main; `develop`: the back-merge, forecast with the branch standing in for the
+tag). `warning` = a leg will conflict; `info` = behind but clean.
+
+Resolve on the branch, where the author of the change can judge it, so the
+finish itself merges cleanly:
+```bash
+git switch hotfix/X.Y.Z
+git merge origin/main          # resolve here, run the tests
+git push origin hotfix/X.Y.Z
+```
+The finish probe repeats this forecast right before merging (`forecast` in its
+output) — never start a finish leg that is forecast to conflict without
+telling the user which files and why.
+
+## multiple-hotfix-branches
+Several hotfixes are open at once. Classic git flow assumes one; teams that
+run several should finish them in version order (`data.finishFirst`), so tags
+and main's merge history tell the same story. Each entry shows the tag the
+branch was cut from (`base`), how far main has moved past it (`behind`) and the
+paths its main merge would conflict on. Branches with `behind > 0`: merge main
+into them first (flow-branch-behind-main). Finishing out of order is allowed —
+the finish probe warns and the agent tells the user.
+
 ## multiple-release-branches
 Classic git flow allows one release at a time (config
 `release.maxConcurrent`). Finish or abandon the older one first. Abandoning:
@@ -171,7 +198,11 @@ git branch -d <branch>
 develop — that is a missing back-merge, investigate before forcing `-D`.
 
 ## release-version-collision
-The release branch targets a version ≤ the latest tag. Rename:
+The release or hotfix branch targets a version ≤ the latest tag (SemVer
+precedence; under `versionScheme.scheme: suffix-counter` a hotfix counter is a
+post-release, so `2.0.0-hotfix.11` ≤ `2.0.0-hotfix.12` and `2.0.0` is below
+both). Rename — for a hotfix the doctor's `repo.versions.nextHotfix` is the
+next free number:
 ```bash
 git branch -m release/OLD release/NEW
 git push origin :release/OLD release/NEW
@@ -327,3 +358,20 @@ gh api -X PUT "repos/$TAP/contents/$F" -f message="chore: <name> X.Y.Z" -f sha="
 ```
 (macOS: `shasum -a 256` and `base64` without `-w0`.) Then `brew update && brew
 upgrade <name>` on a Mac proves the sha.
+
+## tag-convention-drift
+Workspace mode only (`--workspace <file> --tag T`). The same release tag
+differs across repos that ship together — `data.reasons`: `type` (annotated in
+one repo, lightweight in another), `message` (different tag message pattern),
+`missing` (a required repo has no such tag), `not-on-main-tip` (the tag is not
+on main's tip in some repo). `data.repos` shows each repo's facts. Tags are
+shared history: agree with the team first, then recreate only the odd one out
+(`git tag -d T && git tag -a T <main-sha> -m "<messages.tag>" && git push -f
+origin T`), and tell everyone who fetched it.
+
+## workspace-repo-missing
+Workspace mode only. A repo listed in `.gitflow-workspace.json` is not on disk
+at the path given (relative to the workspace file). Clone it there, fix the
+path, or mark the entry `"optional": true` if releases may skip it (the SDK
+that only sometimes ships). A lockstep finish never starts while a required
+repo is missing.
