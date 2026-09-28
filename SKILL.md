@@ -64,7 +64,8 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --format json [flags]
   descriptions, issues) and show that output verbatim instead of retyping
   findings. `--format sarif` feeds code scanning; `--format baseline` feeds the
   Baseline flow. `--list-checks` prints every id; `--explain <id>` a recipe;
-  `--conventions` infers tag/message/back-merge style from history (init).
+  `--conventions` infers tag/message/back-merge style from history (init);
+  `--merge-proof` gives evidence for a staged conflict resolution.
   Probes always emit JSON.
 - Exit codes: 0 clean/info, 1 warnings, 2 criticals, 4 usage error.
 - Findings carry `fix.commands` and `fix.recipeRef` into
@@ -180,7 +181,9 @@ one by one, keep tomorrow's loud.
 1. Never force-push `main`, `develop`, or any tag. `--force-with-lease` is
    allowed only on the user's own feature branch after a rebase they asked for.
 2. Never resolve source-file merge conflicts silently — walk the user through
-   (policy: references/finish-release.md § Back-merge conflicts).
+   (policy: references/finish-release.md § Back-merge conflicts). A proposed
+   resolution is committed only with `--merge-proof` evidence shown and the
+   user's explicit yes.
 3. Never leave a merge half-done: every exit path commits or aborts
    (`operation-in-progress` is the backstop).
 4. Never let `gh release create` create the tag — tag first, push, then

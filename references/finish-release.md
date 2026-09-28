@@ -166,6 +166,28 @@ merging. On conflict, resolve by file class:
   each conflict and commit with the default merge message. Non-interactive:
   `git merge --abort`, report, and instruct to re-run finish (it resumes at
   this step).
+- **Proposed resolution with evidence** (any leg, source files included): when
+  a conflict is a union of two independent edits (one side deleted a comment,
+  the other added lines next to it), you may PROPOSE the resolution: write
+  it, `git add` it, then run
+  `bash <skill-dir>/scripts/gitflow-doctor.sh --offline --merge-proof`.
+  Per conflicted file it reports `oursPlusTheirChange` (resolved = ours +
+  exactly their hunks), `theirsPlusOurChange` (the mirror), `markers`,
+  `eolPreserved`, `bomPreserved` and a `validator` hint (`xml`/`json`/`yaml`:
+  parse the staged file with it). Show the user the two diffs behind the
+  first two fields (`git diff --cached HEAD -- <f>`, `git diff --cached
+  MERGE_HEAD -- <f>`) and the verdict. Commit ONLY on the user's explicit yes;
+  otherwise abort as above. `verdict:"consistent"` is evidence, not a licence
+  — the user still decides. Diffs of generated content go through temporary
+  files: on Git Bash `git diff --no-index <(...) <(...)` fails (git.exe cannot
+  open `/proc/<pid>/fd`).
+- **Same conflict twice** (`backmerge.strategy: merge-branch` replays the main
+  leg's conflict on develop; `merge-tag` usually does not, because the tag
+  already carries the resolution): run BOTH legs with
+  `git -c rerere.enabled=true merge ...` and `git -c rerere.enabled=true commit`
+  so the first resolution is recorded and replayed. A replayed resolution is
+  still re-proved with `--merge-proof` and confirmed; `.git/rr-cache` stays in
+  the repo — mention it.
 Never leave MERGE_HEAD behind — every exit commits or aborts.
 
 ### Squash-only + protected develop

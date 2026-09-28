@@ -68,6 +68,7 @@ HOTFIX_PATTERN=""
 HOTFIX_INFIX=""
 MERGE_MODE="auto"
 CONVENTIONS=0
+MERGE_PROOF=0
 PROBE=""
 PROBE_BRANCH=""
 PROBE_VERSION=""
@@ -111,6 +112,8 @@ usage: gitflow-doctor.sh [options]
   --probe finish-release|finish-hotfix|finish-feature --branch B [--version V]
   --conventions              infer tag/message/back-merge conventions from the
                              newest release/hotfix tags on main (JSON) and exit
+  --merge-proof              during a conflicted merge: evidence per conflicted file
+                             that the staged resolution keeps both sides (JSON) and exit
 EOF
 }
 
@@ -156,6 +159,7 @@ while [ $# -gt 0 ]; do
     --hotfix-pattern) HOTFIX_PATTERN=${2:?}; shift 2 ;;
     --assume-github) ASSUME_GITHUB=${2:?}; shift 2 ;;
     --conventions) CONVENTIONS=1; shift ;;
+    --merge-proof) MERGE_PROOF=1; shift ;;
     --probe) PROBE=${2:?}; shift 2 ;;
     --branch) PROBE_BRANCH=${2:?}; shift 2 ;;
     --version) PROBE_VERSION=${2:?}; shift 2 ;;
@@ -1440,6 +1444,96 @@ run_conventions() {
 
 [ -n "$PROBE" ] && run_probe
 [ "$CONVENTIONS" = 1 ] && run_conventions
+
+# ===========================================================================
+# MERGE-PROOF MODE — evidence for a staged conflict resolution (read-only)
+# ===========================================================================
+diff_body_v() { # varname git-diff-args... -> the +/- lines after the first hunk header
+  local __db_v=$1 __db_out="" __db_line __db_acc="" __db_in=0; shift
+  capture_all __db_out git diff -U0 --no-color --no-ext-diff --no-textconv "$@"
+  while IFS= read -r __db_line; do
+    case "$__db_line" in "@@"*) __db_in=1; continue ;; esac
+    [ "$__db_in" = 1 ] || continue
+    case "$__db_line" in [+-]*) __db_acc="$__db_acc$NL$__db_line" ;; esac
+  done <<<"$__db_out"
+  clear_v "$__db_v"
+  [ -n "$__db_acc" ] && printf -v "$__db_v" '%s' "$__db_acc"
+  return 0
+}
+
+text_stats() { # content -> TS_LINES TS_CR TS_BOM(true/false) TS_MARKERS(true/false)
+  local __ts_line __ts_first=1
+  TS_LINES=0; TS_CR=0; TS_BOM=false; TS_MARKERS=false
+  while IFS= read -r __ts_line || [ -n "$__ts_line" ]; do
+    TS_LINES=$((TS_LINES + 1))
+    if [ "$__ts_first" = 1 ]; then
+      __ts_first=0
+      case "$__ts_line" in $'\xef\xbb\xbf'*) TS_BOM=true ;; esac
+    fi
+    case "$__ts_line" in *$'\r') TS_CR=$((TS_CR + 1)); __ts_line=${__ts_line%$'\r'} ;; esac
+    case "$__ts_line" in '<<<<<<<'|'<<<<<<< '*|'======='|'>>>>>>>'|'>>>>>>> '*|'|||||||'|'||||||| '*) TS_MARKERS=true ;; esac
+  done <<<"$1"
+}
+
+validator_for() { # path -> VALIDATOR (xml|json|yaml|"")
+  case "$1" in
+    *.xml|*.config|*.csproj|*.vbproj|*.fsproj|*.props|*.targets|*.resx|*.xaml|*.svg) VALIDATOR=xml ;;
+    *.json) VALIDATOR=json ;;
+    *.yml|*.yaml) VALIDATOR=yaml ;;
+    *) VALIDATOR="" ;;
+  esac
+}
+
+run_merge_proof() {
+  local theirs="" ours="" base="" paths="" unmerged="" line f files="" jf state
+  capture theirs git rev-parse -q --verify MERGE_HEAD
+  if [ -z "$theirs" ]; then
+    printf '{"gitflowDoctor":"%s","mergeProof":{"merging":false}}\n' "$DOCTOR_VERSION"
+    exit 0
+  fi
+  capture ours git rev-parse -q --verify HEAD
+  capture base git merge-base "$ours" "$theirs"
+  merge_conflicts_v paths "$ours" "$theirs"
+  capture_all unmerged git ls-files -u
+  while IFS= read -r line; do # "mode sha stage<TAB>path": keep conflicted paths merge-tree may not name
+    [ -z "$line" ] && continue
+    f=${line#*$'\t'}
+    case "$NL$paths$NL" in *"$NL$f$NL"*) : ;; *) paths="$paths${paths:+$NL}$f" ;; esac
+  done <<<"$unmerged"
+
+  local their_change our_change ours_to_res theirs_to_res res_txt ours_txt a b m e bom v
+  local ours_lines ours_cr ours_bom
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    json_str_v jf "$f"
+    case "$NL$unmerged" in *$'\t'"$f$NL"*|*$'\t'"$f") state=unresolved ;; *) state=resolved ;; esac
+    if [ "$state" = unresolved ]; then
+      files="$files${files:+,}{\"path\":\"$jf\",\"state\":\"unresolved\",\"verdict\":\"unresolved\"}"
+      continue
+    fi
+    diff_body_v their_change "$base" "$theirs" -- "$f"
+    diff_body_v our_change "$base" "$ours" -- "$f"
+    diff_body_v ours_to_res --cached "$ours" -- "$f"
+    diff_body_v theirs_to_res --cached "$theirs" -- "$f"
+    a=false; [ "$ours_to_res" = "$their_change" ] && a=true
+    b=false; [ "$theirs_to_res" = "$our_change" ] && b=true
+    capture_all ours_txt git show "$ours:$f"
+    capture_all res_txt git show ":0:$f"
+    text_stats "$ours_txt"; ours_lines=$TS_LINES; ours_cr=$TS_CR; ours_bom=$TS_BOM
+    text_stats "$res_txt"; m=$TS_MARKERS
+    e=false
+    if { [ "$ours_cr" -eq 0 ] && [ "$TS_CR" -eq 0 ]; } || { [ "$ours_cr" -eq "$ours_lines" ] && [ "$TS_CR" -eq "$TS_LINES" ]; }; then e=true; fi
+    bom=false; [ "$ours_bom" = "$TS_BOM" ] && bom=true
+    validator_for "$f"
+    v=review
+    [ "$a" = true ] && [ "$b" = true ] && [ "$m" = false ] && [ "$e" = true ] && [ "$bom" = true ] && v=consistent
+    files="$files${files:+,}{\"path\":\"$jf\",\"state\":\"resolved\",\"oursPlusTheirChange\":$a,\"theirsPlusOurChange\":$b,\"markers\":$m,\"eolPreserved\":$e,\"bomPreserved\":$bom,\"validator\":\"$VALIDATOR\",\"verdict\":\"$v\"}"
+  done <<<"$paths"
+  printf '{"gitflowDoctor":"%s","mergeProof":{"merging":true,"ours":"%s","theirs":"%s","base":"%s","files":[%s]}}\n' \
+    "$DOCTOR_VERSION" "$ours" "$theirs" "$base" "$files"
+  exit 0
+}
+[ "$MERGE_PROOF" = 1 ] && run_merge_proof
 
 # ===========================================================================
 # CHECKS
