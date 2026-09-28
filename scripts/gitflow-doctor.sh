@@ -69,6 +69,10 @@ HOTFIX_INFIX=""
 MERGE_MODE="auto"
 CONVENTIONS=0
 MERGE_PROOF=0
+WORKSPACE=""
+WS_TAG=""
+WS_POLICY=""
+WS_PASS=""
 PROBE=""
 PROBE_BRANCH=""
 PROBE_VERSION=""
@@ -114,6 +118,9 @@ usage: gitflow-doctor.sh [options]
                              newest release/hotfix tags on main (JSON) and exit
   --merge-proof              during a conflicted merge: evidence per conflicted file
                              that the staged resolution keeps both sides (JSON) and exit
+  --workspace FILE [--branch B] [--tag T]
+                             several repos in lockstep (.gitflow-workspace.json): per-repo
+                             doctor summary, finish probe for B, tag consistency for T
 EOF
 }
 
@@ -160,6 +167,8 @@ while [ $# -gt 0 ]; do
     --assume-github) ASSUME_GITHUB=${2:?}; shift 2 ;;
     --conventions) CONVENTIONS=1; shift ;;
     --merge-proof) MERGE_PROOF=1; shift ;;
+    --workspace) WORKSPACE=${2:?}; shift 2 ;;
+    --tag) WS_TAG=${2:?}; shift 2 ;;
     --probe) PROBE=${2:?}; shift 2 ;;
     --branch) PROBE_BRANCH=${2:?}; shift 2 ;;
     --version) PROBE_VERSION=${2:?}; shift 2 ;;
@@ -174,7 +183,7 @@ case "$VERSION_SCHEME" in ''|semver|suffix-counter) : ;; *) die_usage "--version
 # ---------------------------------------------------------------------------
 # Check catalog (the authoritative id list; README/action counts derive from it)
 # ---------------------------------------------------------------------------
-ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift flow-branch-behind-main multiple-release-branches multiple-hotfix-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale"
+ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift flow-branch-behind-main multiple-release-branches multiple-hotfix-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale tag-convention-drift workspace-repo-missing"
 RECIPES_URL="https://github.com/cagatayuncu/gitdoctor/blob/main/references/fix-recipes.md"
 
 known_check_id() { case " $ALL_CHECK_IDS " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -533,6 +542,185 @@ finish_exit() {
   [ "$FORMAT" = baseline ] && exit 0 # a baseline is data, not a verdict
   case "$WORST" in 3) exit 2 ;; 2) exit 1 ;; *) exit 0 ;; esac
 }
+
+template_v() { # varname subject branch tag version -> placeholders substituted
+  local __tp_s=$2 __tp_b='{branch}' __tp_t='{tag}' __tp_v='{version}' __tp_d="into {develop}" __tp_m="into {main}"
+  [ -n "$3" ] && __tp_s=${__tp_s//"$3"/$__tp_b}
+  [ -n "$4" ] && __tp_s=${__tp_s//"$4"/$__tp_t}
+  [ -n "$5" ] && __tp_s=${__tp_s//"$5"/$__tp_v}
+  [ -n "$DEVELOP" ] && __tp_s=${__tp_s//"into $DEVELOP"/$__tp_d}
+  [ -n "$MAIN" ] && __tp_s=${__tp_s//"into $MAIN"/$__tp_m}
+  printf -v "$1" '%s' "$__tp_s"
+}
+
+distinct_count_v() { # varname newline-list -> number of distinct lines (empty lines count too)
+  local __dc_v=$1 __dc_l __dc_seen="$NL" __dc_n=0
+  while IFS= read -r __dc_l; do
+    case "$__dc_seen" in *"$NL$__dc_l$NL"*) continue ;; esac
+    __dc_seen="$__dc_seen$__dc_l$NL"; __dc_n=$((__dc_n + 1))
+  done <<<"$2"
+  printf -v "$__dc_v" '%s' "$__dc_n"
+}
+
+# ===========================================================================
+# WORKSPACE MODE — several repos released in lockstep (read-only). Runs before
+# the repo bootstrap: the workspace file usually lives OUTSIDE any repo.
+# ===========================================================================
+WS_ITEM_RE='^[[:space:],]*("([^"]*)"|\{([^}]*)\})'
+WS_PATH_RE='"path"[[:space:]]*:[[:space:]]*"([^"]*)"'
+WS_OPT_RE='"optional"[[:space:]]*:[[:space:]]*true'
+WS_POLICY_RE='"pushPolicy"[[:space:]]*:[[:space:]]*"([^"]*)"'
+WS_SUMMARY_RE='"summary":(\{[^}]*\})'
+WS_MAIN_RE='"main":"([^"]*)","develop"'
+WS_LATEST_RE='"latestTag":"([^"]*)"'
+WS_CRIT_RE='"critical":([0-9]+)'
+
+in_repo() { # dir cmd... (subshell: the caller's cwd never changes)
+  (cd "$1" || exit 1; shift; "$@")
+}
+
+ws_entries_v() { # varname workspace-file -> lines "optional<US>path"; also sets WS_POLICY
+  local __we_v=$1 __we_all="" __we_l __we_arr __we_item __we_obj __we_p __we_opt __we_out=""
+  while IFS= read -r __we_l || [ -n "$__we_l" ]; do __we_all="$__we_all ${__we_l%$'\r'}"; done <"$2"
+  WS_POLICY=""
+  [[ $__we_all =~ $WS_POLICY_RE ]] && WS_POLICY=${BASH_REMATCH[1]}
+  case "$__we_all" in *'"repos"'*) : ;; *) die_usage "--workspace: no \"repos\" array in $2" ;; esac
+  __we_arr=${__we_all#*'"repos"'}; __we_arr=${__we_arr#*[}; __we_arr=${__we_arr%%]*}
+  while [[ $__we_arr =~ $WS_ITEM_RE ]]; do
+    __we_item=${BASH_REMATCH[0]}; __we_p=${BASH_REMATCH[2]}; __we_obj=${BASH_REMATCH[3]}; __we_opt=false
+    if [ -n "$__we_obj" ]; then
+      __we_p=""
+      [[ $__we_obj =~ $WS_PATH_RE ]] && __we_p=${BASH_REMATCH[1]}
+      [[ $__we_obj =~ $WS_OPT_RE ]] && __we_opt=true
+    fi
+    __we_arr=${__we_arr:${#__we_item}}
+    [ -n "$__we_p" ] && __we_out="$__we_out${__we_out:+$NL}$__we_opt$US$__we_p"
+  done
+  clear_v "$__we_v"
+  [ -n "$__we_out" ] && printf -v "$__we_v" '%s' "$__we_out"
+  return 0
+}
+
+ws_tag_facts() { # repo-dir main-name -> WT_EXISTS WT_TYPE WT_MSG WT_ONTIP
+  local tf="" typ r obj peeled subj target tip=""
+  WT_EXISTS=false; WT_TYPE=""; WT_MSG=""; WT_ONTIP=false
+  capture tf git -C "$1" for-each-ref --format='%(objecttype)%09%(objectname)%09%(*objectname)%09%(contents:subject)' "refs/tags/$WS_TAG"
+  [ -n "$tf" ] || return 0
+  WT_EXISTS=true
+  typ=${tf%%$'\t'*}; r=${tf#*$'\t'}; obj=${r%%$'\t'*}; r=${r#*$'\t'}; peeled=${r%%$'\t'*}; subj=${r#*$'\t'}
+  target=$obj; WT_TYPE=lightweight
+  if [ "$typ" = tag ]; then
+    target=$peeled; WT_TYPE=annotated
+    template_v WT_MSG "$subj" "" "$WS_TAG" "${WS_TAG#v}"
+  fi
+  if [ -n "$2" ]; then
+    capture tip git -C "$1" rev-parse -q --verify "refs/remotes/origin/$2^{commit}"
+    [ -z "$tip" ] && capture tip git -C "$1" rev-parse -q --verify "refs/heads/$2^{commit}"
+  fi
+  [ -n "$tip" ] && [ "$tip" = "$target" ] && WT_ONTIP=true
+  return 0
+}
+
+ws_branch_json_v() { # varname repo-dir self -> ,"branch":{...}[,"probe":{...}]
+  local __wb_v=$1 bl="" jb kind="" ver="" pr="" pj=null
+  capture bl git -C "$2" for-each-ref --format='%(refname)' "refs/heads/$PROBE_BRANCH" "refs/remotes/origin/$PROBE_BRANCH"
+  json_str_v jb "$PROBE_BRANCH"
+  if [ -z "$bl" ]; then
+    printf -v "$__wb_v" ',"branch":{"name":"%s","present":false,"skipped":"no branch"}' "$jb"
+    return 0
+  fi
+  case "$PROBE_BRANCH" in
+    "$RELEASE_PREFIX"*) kind=finish-release; ver=${PROBE_BRANCH#"$RELEASE_PREFIX"} ;;
+    "$HOTFIX_PREFIX"*) kind=finish-hotfix; ver=${PROBE_BRANCH#"$HOTFIX_PREFIX"} ;;
+    "$FEATURE_PREFIX"*) kind=finish-feature ;;
+  esac
+  if [ -n "$ver" ]; then
+    # shellcheck disable=SC2086 # WS_PASS is a flag list, split on purpose
+    capture pr in_repo "$2" bash "$3" --probe "$kind" --branch "$PROBE_BRANCH" --version "$ver" $WS_PASS
+  elif [ -n "$kind" ]; then
+    # shellcheck disable=SC2086
+    capture pr in_repo "$2" bash "$3" --probe "$kind" --branch "$PROBE_BRANCH" $WS_PASS
+  fi
+  [ -n "$pr" ] && pj=$pr
+  printf -v "$__wb_v" ',"branch":{"name":"%s","present":true},"probe":%s' "$jb" "$pj"
+}
+
+run_workspace() {
+  local file=$WORKSPACE self=${BASH_SOURCE[0]} dir entries="" opt p rp jp robj repos="" dj summ rmain lt crit
+  local status
+  local ws_crit=0 bj types="" msgs="" rows="" missing=0 offtip=0 have_tag=0 jt jm reasons="" n line joined=""
+  [ -f "$file" ] || die_usage "--workspace: file not found: $file"
+  case "$self" in /*|[A-Za-z]:*) : ;; *) self="$PWD/$self" ;; esac
+  dir=${file%/*}; [ "$dir" = "$file" ] && dir=.
+  WS_PASS="--now $NOW"
+  if [ "$OFFLINE" = 1 ]; then WS_PASS="$WS_PASS --offline"; elif [ "$DO_FETCH" = 0 ]; then WS_PASS="$WS_PASS --no-fetch"; fi
+  ws_entries_v entries "$file"
+  json_str_v jt "$WS_TAG"
+  while IFS="$US" read -r opt p; do
+    [ -z "$p" ] && continue
+    rp=$p
+    case "$p" in /*|[A-Za-z]:*) : ;; *) rp="$dir/$p" ;; esac
+    json_str_v jp "$p"
+    if [ ! -e "$rp/.git" ]; then
+      repos="$repos${repos:+,}{\"path\":\"$jp\",\"optional\":$opt,\"status\":\"missing\"}"
+      if [ "$opt" = false ]; then
+        json_arr_v FIX "clone it at $rp, or mark it \"optional\": true in $file"
+        fail_check workspace-repo-missing critical "required repo $p not found at $rp" "\"path\":\"$jp\"" "$FIX" workspace-repo-missing high "$p"
+      fi
+      continue
+    fi
+    dj=""
+    # shellcheck disable=SC2086
+    capture dj in_repo "$rp" bash "$self" --format json $WS_PASS
+    summ="{}"; rmain=""; lt=""; crit=0
+    [[ $dj =~ $WS_SUMMARY_RE ]] && summ=${BASH_REMATCH[1]}
+    [[ $dj =~ $WS_MAIN_RE ]] && rmain=${BASH_REMATCH[1]}
+    [[ $dj =~ $WS_LATEST_RE ]] && lt=${BASH_REMATCH[1]}
+    [[ $summ =~ $WS_CRIT_RE ]] && crit=${BASH_REMATCH[1]}
+    [ "$crit" -gt 0 ] && ws_crit=1
+    status=ok; [ -z "$dj" ] && status=error
+    robj="{\"path\":\"$jp\",\"optional\":$opt,\"status\":\"$status\",\"summary\":$summ,\"main\":\"$rmain\",\"latestTag\":\"$lt\""
+    if [ -n "$PROBE_BRANCH" ]; then ws_branch_json_v bj "$rp" "$self"; robj="$robj$bj"; fi
+    if [ -n "$WS_TAG" ]; then
+      ws_tag_facts "$rp" "$rmain"
+      if [ "$WT_EXISTS" = true ]; then
+        have_tag=1
+        json_str_v jm "$WT_MSG"
+        robj="$robj,\"tag\":{\"name\":\"$jt\",\"type\":\"$WT_TYPE\",\"message\":\"$jm\",\"onMainTip\":$WT_ONTIP}"
+        types="$types${types:+$NL}$WT_TYPE"
+        [ "$WT_TYPE" = annotated ] && msgs="$msgs${msgs:+$NL}$WT_MSG" # lightweight tags carry no message
+        [ "$WT_ONTIP" = false ] && offtip=1
+        rows="$rows${rows:+,}{\"path\":\"$jp\",\"type\":\"$WT_TYPE\",\"message\":\"$jm\",\"onMainTip\":$WT_ONTIP}"
+      else
+        robj="$robj,\"tag\":{\"name\":\"$jt\",\"exists\":false}"
+        [ "$opt" = false ] && missing=1
+        rows="$rows${rows:+,}{\"path\":\"$jp\",\"exists\":false}"
+      fi
+    fi
+    repos="$repos${repos:+,}$robj}"
+  done <<<"$entries"
+
+  if [ "$have_tag" = 1 ]; then
+    distinct_count_v n "$types"; [ "$n" -gt 1 ] && reasons="$reasons${reasons:+,}\"type\""
+    distinct_count_v n "$msgs"; [ "$n" -gt 1 ] && reasons="$reasons${reasons:+,}\"message\""
+    [ "$missing" = 1 ] && reasons="$reasons${reasons:+,}\"missing\""
+    [ "$offtip" = 1 ] && reasons="$reasons${reasons:+,}\"not-on-main-tip\""
+    if [ -n "$reasons" ]; then
+      json_arr_v FIX "compare: git -C <repo> for-each-ref --format='%(objecttype) %(*objectname) %(contents:subject)' refs/tags/$WS_TAG" "recreate the odd one out only after the team agrees (tags are shared history)"
+      fail_check tag-convention-drift warning "tag $WS_TAG differs across the workspace" \
+        "\"tag\":\"$jt\",\"reasons\":[$reasons],\"repos\":[$rows]" "$FIX" tag-convention-drift high "$WS_TAG"
+    fi
+  fi
+  while IFS= read -r line; do [ -n "$line" ] && joined="$joined${joined:+,}$line"; done <<<"$FINDINGS"
+  local ready=true jf jpol
+  { [ "$WORST" -ge 2 ] || [ "$ws_crit" = 1 ]; } && ready=false
+  json_str_v jf "$file"; json_str_v jpol "$WS_POLICY"
+  printf '{"gitflowDoctor":"%s","workspace":{"file":"%s","pushPolicy":"%s","ready":%s,"repos":[%s],"findings":[%s]}}\n' \
+    "$DOCTOR_VERSION" "$jf" "$jpol" "$ready" "$repos" "$joined"
+  [ "$ws_crit" = 1 ] && [ "$WORST" -lt 3 ] && WORST=3
+  case "$WORST" in 3) exit 2 ;; 2) exit 1 ;; *) exit 0 ;; esac
+}
+[ -n "$WORKSPACE" ] && run_workspace
 
 # ---------------------------------------------------------------------------
 # Repo bootstrap: one rev-parse batch answers repo/root/shallow at once
@@ -1303,16 +1491,6 @@ run_probe() {
 # ===========================================================================
 CONV_SAMPLE=5
 PRERELEASE_WORDS=" alpha beta rc pre preview dev snapshot canary next nightly "
-
-template_v() { # varname subject branch tag version -> placeholders substituted
-  local __tp_s=$2 __tp_b='{branch}' __tp_t='{tag}' __tp_v='{version}' __tp_d="into {develop}" __tp_m="into {main}"
-  [ -n "$3" ] && __tp_s=${__tp_s//"$3"/$__tp_b}
-  [ -n "$4" ] && __tp_s=${__tp_s//"$4"/$__tp_t}
-  [ -n "$5" ] && __tp_s=${__tp_s//"$5"/$__tp_v}
-  __tp_s=${__tp_s//"into $DEVELOP"/$__tp_d}
-  __tp_s=${__tp_s//"into $MAIN"/$__tp_m}
-  printf -v "$1" '%s' "$__tp_s"
-}
 
 majority_v() { # varname newline-list -> most frequent line (first seen wins ties)
   local __mj_v=$1 __mj_a __mj_b __mj_n __mj_best="" __mj_bn=0

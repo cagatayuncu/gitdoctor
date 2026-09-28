@@ -7,7 +7,7 @@ cd "$TESTTMP" # not a git repo
 
 bash "$DOCTOR" --list-checks >"$TESTTMP/ids.txt" || fail "--list-checks must exit 0"
 n=$(grep -c . "$TESTTMP/ids.txt")
-[ "$n" -eq 49 ] || fail "expected 49 check ids, got $n"
+[ "$n" -eq 51 ] || fail "expected 51 check ids, got $n"
 for id in missing-back-merge changelog-tag-mismatch tag-unsigned gh-protection-missing-develop gh-release-missing-for-tag homebrew-formula-stale back-merge-content-only orphaned-hotfix-branch; do
   grep -qx "$id" "$TESTTMP/ids.txt" || fail "id $id missing from --list-checks"
 done

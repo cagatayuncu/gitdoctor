@@ -358,3 +358,20 @@ gh api -X PUT "repos/$TAP/contents/$F" -f message="chore: <name> X.Y.Z" -f sha="
 ```
 (macOS: `shasum -a 256` and `base64` without `-w0`.) Then `brew update && brew
 upgrade <name>` on a Mac proves the sha.
+
+## tag-convention-drift
+Workspace mode only (`--workspace <file> --tag T`). The same release tag
+differs across repos that ship together — `data.reasons`: `type` (annotated in
+one repo, lightweight in another), `message` (different tag message pattern),
+`missing` (a required repo has no such tag), `not-on-main-tip` (the tag is not
+on main's tip in some repo). `data.repos` shows each repo's facts. Tags are
+shared history: agree with the team first, then recreate only the odd one out
+(`git tag -d T && git tag -a T <main-sha> -m "<messages.tag>" && git push -f
+origin T`), and tell everyone who fetched it.
+
+## workspace-repo-missing
+Workspace mode only. A repo listed in `.gitflow-workspace.json` is not on disk
+at the path given (relative to the workspace file). Clone it there, fix the
+path, or mark the entry `"optional": true` if releases may skip it (the SDK
+that only sometimes ships). A lockstep finish never starts while a required
+repo is missing.

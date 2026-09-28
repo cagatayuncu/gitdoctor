@@ -34,6 +34,7 @@ tags `vX.Y.Z` on main).
 | `gitdoctor cleanup` | Stale-branch cleanup (below) |
 | `gitdoctor explain <check-id>` | `bash <skill-dir>/scripts/gitflow-doctor.sh --explain <check-id>` — print the recipe verbatim |
 | `gitdoctor baseline` | Adopt today's findings as ignore entries (below) |
+| `gitdoctor workspace status\|finish <branch>` / "all three repos" | references/workspace.md (`--workspace .gitflow-workspace.json`) |
 
 On `finish` with no arguments: read the current branch. `feature/*` →
 finish-feature; `release/*` → finish-release; `hotfix/*` → finish-hotfix;
@@ -203,4 +204,5 @@ one by one, keep tomorrow's loud.
 - references/finish-feature.md — feature finish
 - references/fix-recipes.md — every doctor finding, one recipe each
 - references/config.md — .gitflow.json schema
+- references/workspace.md — several repos in lockstep (.gitflow-workspace.json)
 - references/version-files.md — version-file preset patterns
