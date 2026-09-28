@@ -66,7 +66,9 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --format json [flags]
   findings. `--format sarif` feeds code scanning; `--format baseline` feeds the
   Baseline flow. `--list-checks` prints every id; `--explain <id>` a recipe;
   `--conventions` infers tag/message/back-merge style from history (init);
-  `--merge-proof` gives evidence for a staged conflict resolution.
+  `--merge-proof` gives evidence for a staged conflict resolution;
+  `--push-guard <b>[,<b>]` checks, right before a push, whether origin moved
+  since the last fetch (exit 1 = do not push).
   Probes always emit JSON.
 - Exit codes: 0 clean/info, 1 warnings, 2 criticals, 4 usage error.
 - Findings carry `fix.commands` and `fix.recipeRef` into
@@ -181,6 +183,9 @@ one by one, keep tomorrow's loud.
 
 1. Never force-push `main`, `develop`, or any tag. `--force-with-lease` is
    allowed only on the user's own feature branch after a rebase they asked for.
+   Every finish push is preceded by `--push-guard`; `safe:false` → stop and
+   show the user what origin has (references/finish-release.md § Push guard
+   and finish.lock).
 2. Never resolve source-file merge conflicts silently — walk the user through
    (policy: references/finish-release.md § Back-merge conflicts). A proposed
    resolution is committed only with `--merge-proof` evidence shown and the
