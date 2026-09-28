@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.4.0 (2026-09-28)
+
+### Features
+- Version schemes: `versionScheme.scheme` `semver` (default) or
+  `suffix-counter` with `versionScheme.hotfixPattern` (default
+  `{base}-hotfix.{n}`), so `2.0.0 < 2.0.0-hotfix.9 < 2.0.0-hotfix.12 < 2.0.1`
+  and `hotfix/2.0.0-hotfix.12` is a valid branch; the doctor orders versions
+  itself with strict SemVer precedence instead of git's `versionsort.suffix`-
+  dependent sort; `repo.versions {scheme, latestTag, nextHotfix}` in the output
+- Conflict forecasts: `flow-branch-behind-main` (an open release/hotfix branch
+  main has moved past, with the paths each finish leg would conflict on) and
+  `multiple-hotfix-branches` (open hotfixes in version order with base tag,
+  lag and conflicts, plus which to finish first); finish probes emit a
+  `forecast` object and warn before any merge starts
+- Message templates: `messages.mergeToMain` / `backMerge` / `tag` with
+  `{branch} {tag} {version} {type} {main} {develop}` (defaults unchanged);
+  `--conventions` infers tag prefix, tag type, message templates, back-merge
+  strategy and version scheme from the newest release/hotfix tags, and init
+  proposes them
+- Verify step: `verify.main` / `verify.develop` commands run on the merged
+  branch before tagging and pushing (local mode), read from `origin/<main>`,
+  confirmed by the user, with `expect` evidence globs and `sideEffects` notes;
+  a failed verify stops before the tag and the push
+- Evidence-backed conflict resolution: `--merge-proof` reports, per
+  conflicted file, whether the staged resolution is exactly ours + their hunks
+  and theirs + our hunks, leftover markers, line endings / BOM and a validator
+  hint; a union resolution is committed only with that evidence and the
+  user's yes; both finish legs run with `rerere` so the main-leg resolution is
+  replayed on the back-merge
+- Workspace mode: `--workspace <file> [--branch B] [--tag T]` over a
+  `.gitflow-workspace.json` for repos that release in lockstep — per-repo
+  summary and embedded finish probe, `workspace.ready` gate, closing table;
+  new checks `workspace-repo-missing` and `tag-convention-drift` (51 total);
+  `schema/gitflow-workspace.schema.json`
+
+### Docs
+- README: How to use guide, Release / Hotfix lifecycles with gitGraph
+  diagrams, and sections for version schemes, forecasts, conventions, verify
+  and workspaces
+- A push that landed from another tool mid-finish is met safely (no-op or a
+  rejected non-fast-forward, never `--force`); finish from one tool
+
+### Tests
+- 65 fixtures (version scheme, behind-main forecast, conventions, merge proof,
+  workspace, probe conflict forecast)
+
 ## 0.3.0 (2026-09-04)
 
 ### Features
