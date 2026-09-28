@@ -37,6 +37,10 @@ run the doctor immediately after aborting a release.
 Hotfix version must be `> latest tag on main` and `< any open release's
 version`. Violation → warn: the hotfix collides with the pending release line
 (e.g. release/1.3.0 open, latest v1.2.5 → hotfix is 1.2.6, not 1.3.x).
+Compare by SemVer precedence (plus the `suffix-counter` post-release rule),
+never by `git tag --sort` — the doctor reports a hotfix at or below the latest
+tag as `release-version-collision` and gives the next free number as
+`repo.versions.nextHotfix`.
 
 ## Urgency affordance
 

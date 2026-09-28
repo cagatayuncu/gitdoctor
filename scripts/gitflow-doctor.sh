@@ -63,6 +63,9 @@ IGNORE_SHAS=""
 IGNORE_FINDINGS=""
 ASSUME_GITHUB=""
 ALLOW_PRERELEASE=0
+VERSION_SCHEME=""
+HOTFIX_PATTERN=""
+HOTFIX_INFIX=""
 MERGE_MODE="auto"
 PROBE=""
 PROBE_BRANCH=""
@@ -94,6 +97,9 @@ usage: gitflow-doctor.sh [options]
   --version-file PATH --version-pattern ERE   (repeatable, paired; POSIX ERE
                              matched per line, capture group 1 = version)
   --allow-prerelease         accept x.y.z-suffix in release/hotfix branch names
+  --version-scheme S         semver (default) | suffix-counter (hotfixes are
+                             post-releases X.Y.Z<infix>N that sort after X.Y.Z)
+  --hotfix-pattern P         suffix-counter hotfix version, default {base}-hotfix.{n}
   --changelog PATH           changelog file (enables changelog-tag-mismatch)
   --no-github-release        repo does not publish GitHub Releases (skips gh-release-missing-for-tag)
   --require-signed-tags      release tags must be GPG/SSH signed (enables tag-unsigned)
@@ -143,6 +149,8 @@ while [ $# -gt 0 ]; do
     --version-file) VF_PATHS="$VF_PATHS${VF_PATHS:+$NL}${2:?}"; shift 2 ;;
     --version-pattern) VF_PATTERNS="$VF_PATTERNS${VF_PATTERNS:+$NL}${2:?}"; VF_COUNT=$((VF_COUNT + 1)); shift 2 ;;
     --allow-prerelease) ALLOW_PRERELEASE=1; shift ;;
+    --version-scheme) VERSION_SCHEME=${2:?}; shift 2 ;;
+    --hotfix-pattern) HOTFIX_PATTERN=${2:?}; shift 2 ;;
     --assume-github) ASSUME_GITHUB=${2:?}; shift 2 ;;
     --probe) PROBE=${2:?}; shift 2 ;;
     --branch) PROBE_BRANCH=${2:?}; shift 2 ;;
@@ -153,6 +161,7 @@ while [ $# -gt 0 ]; do
 done
 
 case "$FORMAT" in json|jsonl|text|markdown|sarif|baseline) : ;; *) die_usage "--format must be json, jsonl, text, markdown, sarif or baseline" ;; esac
+case "$VERSION_SCHEME" in ''|semver|suffix-counter) : ;; *) die_usage "--version-scheme must be semver or suffix-counter" ;; esac
 
 # ---------------------------------------------------------------------------
 # Check catalog (the authoritative id list; README/action counts derive from it)
@@ -388,6 +397,7 @@ render_text() {
   printf 'gitdoctor %s  %s\n' "$DOCTOR_VERSION" "${REPO_ROOT:-$PWD}"
   printf 'main: %s  develop: %s  github: %s  merge-mode: %s (main=%s, develop=%s)\n\n' \
     "${MAIN:-?}" "${DEVELOP:-?}" "${SLUG:--}" "$MERGE_MODE" "${RESOLVED_MAIN_MODE:-unknown}" "${RESOLVED_DEV_MODE:-unknown}"
+  [ -n "${LATEST_TAG:-}" ] && printf 'latest tag: %s (%s)  next hotfix: %s\n\n' "$LATEST_TAG" "$VERSION_SCHEME" "${NEXT_HOTFIX:--}"
   [ -z "$REC_LINES" ] && printf 'no findings\n'
   while IFS="$US" read -r kind id sev title conf recipe key fix; do
     [ -z "$kind" ] && continue
@@ -488,7 +498,10 @@ print_output() {
   local jr js jm jd
   json_str_v jr "${REPO_ROOT:-}"; json_str_v js "${SLUG:-}"
   json_str_v jm "${MAIN:-}"; json_str_v jd "${DEVELOP:-}"
-  repo="{\"root\":\"$jr\",\"github\":\"$js\",\"main\":\"$jm\",\"develop\":\"$jd\",\"mergeMode\":{\"configured\":\"$MERGE_MODE\",\"resolved\":{\"main\":\"${RESOLVED_MAIN_MODE:-unknown}\",\"develop\":\"${RESOLVED_DEV_MODE:-unknown}\"}}}"
+  local jl jn
+  json_str_v jl "${LATEST_TAG:-}"; json_str_v jn "${NEXT_HOTFIX:-}"
+  repo="{\"root\":\"$jr\",\"github\":\"$js\",\"main\":\"$jm\",\"develop\":\"$jd\",\"mergeMode\":{\"configured\":\"$MERGE_MODE\",\"resolved\":{\"main\":\"${RESOLVED_MAIN_MODE:-unknown}\",\"develop\":\"${RESOLVED_DEV_MODE:-unknown}\"}}"
+  repo="$repo,\"versions\":{\"scheme\":\"${VERSION_SCHEME:-semver}\",\"latestTag\":\"$jl\",\"nextHotfix\":\"$jn\"}}"
   case "$FORMAT" in
     text) render_text; return ;;
     markdown) render_markdown; return ;;
@@ -533,7 +546,7 @@ SHALLOW=0; [ "$_shallow" = true ] && SHALLOW=1
 # zero-spawn scan of the scalar keys the doctor understands; the agent passes
 # everything as flags, which always win. Several keys may share one line.
 CONFIG_FILE="$REPO_ROOT/.gitflow.json"
-CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
+CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula|scheme|hotfixPattern)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
 if [ -f "$CONFIG_FILE" ]; then
   CFG_CL_BLOCK=0; CFG_CL_FILE=""; CFG_CL_ENABLED=true
   while IFS= read -r line || [ -n "$line" ]; do
@@ -555,6 +568,8 @@ if [ -f "$CONFIG_FILE" ]; then
         signedTags) [ "$val" = true ] && REQUIRE_SIGNED_TAGS=1 ;;
         tap) [ -z "$HOMEBREW_TAP" ] && HOMEBREW_TAP=$val ;;
         formula) [ -z "$HOMEBREW_FORMULA" ] && HOMEBREW_FORMULA=$val ;;
+        scheme) [ -z "$VERSION_SCHEME" ] && VERSION_SCHEME=$val ;;
+        hotfixPattern) [ -z "$HOTFIX_PATTERN" ] && HOTFIX_PATTERN=$val ;;
       esac
     done
   done <"$CONFIG_FILE"
@@ -569,6 +584,19 @@ fi
 [ -z "$SCAN_DEPTH" ] && SCAN_DEPTH=200
 [ -z "$MAX_RELEASES" ] && MAX_RELEASES=1
 [ "$ALLOW_PRERELEASE" = 1 ] && RELEASE_NAME_RE=$RELEASE_NAME_PRE_RE
+case "$VERSION_SCHEME" in
+  ''|semver) VERSION_SCHEME=semver ;;
+  suffix-counter)
+    # {base}<infix>{n}: the infix must turn X.Y.Z into a SemVer prerelease
+    # (leading '-') and must not end in a digit, or N would be ambiguous
+    [ -z "$HOTFIX_PATTERN" ] && HOTFIX_PATTERN='{base}-hotfix.{n}'
+    case "$HOTFIX_PATTERN" in
+      "{base}"*"{n}") HOTFIX_INFIX=${HOTFIX_PATTERN#"{base}"}; HOTFIX_INFIX=${HOTFIX_INFIX%"{n}"} ;;
+    esac
+    [[ $HOTFIX_INFIX =~ ^-[0-9A-Za-z.-]*[A-Za-z.-]$ ]] \
+      || die_usage "--hotfix-pattern must look like {base}-hotfix.{n} (got '$HOTFIX_PATTERN')" ;;
+  *) die_usage "versionScheme.scheme must be semver or suffix-counter (got '$VERSION_SCHEME')" ;;
+esac
 
 # git version gate for merge-tree (needs >= 2.38); parsed without spawning sed
 GITV=""
@@ -718,15 +746,66 @@ is_semver_tag() { # tag name including prefix
   [[ $s =~ $SEMVER_RE ]]
 }
 
-semver_le() { # a b (bare x.y.z[-pre]) -> a <= b, numeric fields only
-  local a1 a2 a3 b1 b2 b3
-  IFS=. read -r a1 a2 a3 <<<"${1%%[-+]*}"
-  IFS=. read -r b1 b2 b3 <<<"${2%%[-+]*}"
-  a1=${a1:-0}; a2=${a2:-0}; a3=${a3:-0}; b1=${b1:-0}; b2=${b2:-0}; b3=${b3:-0}
-  [ "$a1" -ne "$b1" ] && { [ "$a1" -lt "$b1" ]; return; }
-  [ "$a2" -ne "$b2" ] && { [ "$a2" -lt "$b2" ]; return; }
-  [ "$a3" -le "$b3" ]
+# ---------------------------------------------------------------------------
+# Version precedence, computed in bash: strict SemVer 2.0, plus the
+# suffix-counter scheme where X.Y.Z<infix>N is a POST-release of X.Y.Z (after
+# X.Y.Z, before X.Y.Z+1; N numeric). git's version sort is never trusted for
+# this — `versionsort.suffix` in the user's config reorders prereleases.
+# ---------------------------------------------------------------------------
+VCMP=0
+num_cmp() { # a b (decimal strings) -> VCMP
+  if [ "$1" -lt "$2" ]; then VCMP=-1; elif [ "$1" -gt "$2" ]; then VCMP=1; else VCMP=0; fi
 }
+prerelease_cmp() { # a b (dot-separated identifiers) -> VCMP, SemVer rule 11
+  local ra="$1." rb="$2." ia ib
+  while :; do
+    if [ -z "$ra" ] && [ -z "$rb" ]; then VCMP=0; return; fi
+    [ -z "$ra" ] && { VCMP=-1; return; }
+    [ -z "$rb" ] && { VCMP=1; return; }
+    ia=${ra%%.*}; ra=${ra#*.}; ib=${rb%%.*}; rb=${rb#*.}
+    if [[ $ia =~ ^[0-9]+$ ]]; then
+      [[ $ib =~ ^[0-9]+$ ]] || { VCMP=-1; return; }
+      num_cmp "$ia" "$ib"; [ "$VCMP" != 0 ] && return
+    elif [[ $ib =~ ^[0-9]+$ ]]; then VCMP=1; return
+    elif [[ $ia < $ib ]]; then VCMP=-1; return
+    elif [[ $ia > $ib ]]; then VCMP=1; return
+    fi
+  done
+}
+counter_version_parts() { # version -> 0 + CV_BASE/CV_N when it is X.Y.Z<infix>N
+  [ -n "$HOTFIX_INFIX" ] || return 1
+  case "$1" in *"$HOTFIX_INFIX"*) : ;; *) return 1 ;; esac
+  CV_BASE=${1%"$HOTFIX_INFIX"*}; CV_N=${1##*"$HOTFIX_INFIX"}
+  [[ $CV_BASE =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ $CV_N =~ ^[0-9]+$ ]]
+}
+CV_BASE=""; CV_N=""
+ver_parts() { # prefix version -> <prefix>Maj Min Pat Kind(-1 pre, 0 release, 1 post) Rest
+  local __vp_s=${2%%+*} __vp_core __vp_rest="" __vp_kind=0 __vp_a __vp_b __vp_c
+  case "$__vp_s" in
+    *-*) __vp_core=${__vp_s%%-*}; __vp_rest=${__vp_s#*-}; __vp_kind=-1 ;;
+    *) __vp_core=$__vp_s ;;
+  esac
+  if counter_version_parts "$__vp_s"; then __vp_core=$CV_BASE; __vp_rest=$CV_N; __vp_kind=1; fi
+  IFS=. read -r __vp_a __vp_b __vp_c <<<"$__vp_core"
+  printf -v "${1}Maj" '%s' "${__vp_a:-0}"
+  printf -v "${1}Min" '%s' "${__vp_b:-0}"
+  printf -v "${1}Pat" '%s' "${__vp_c:-0}"
+  printf -v "${1}Kind" '%s' "$__vp_kind"
+  printf -v "${1}Rest" '%s' "${__vp_rest:-0}"
+}
+version_cmp() { # a b (bare versions, no tag prefix) -> VCMP -1/0/1
+  ver_parts _va "$1"; ver_parts _vb "$2"
+  num_cmp "$_vaMaj" "$_vbMaj"; [ "$VCMP" != 0 ] && return
+  num_cmp "$_vaMin" "$_vbMin"; [ "$VCMP" != 0 ] && return
+  num_cmp "$_vaPat" "$_vbPat"; [ "$VCMP" != 0 ] && return
+  num_cmp "$_vaKind" "$_vbKind"; [ "$VCMP" != 0 ] && return
+  case "$_vaKind" in
+    -1) prerelease_cmp "$_vaRest" "$_vbRest" ;;
+    1) num_cmp "$_vaRest" "$_vbRest" ;;
+    *) VCMP=0 ;;
+  esac
+}
+version_le() { version_cmp "$1" "$2"; [ "$VCMP" != 1 ]; }
 
 # merged-into-main tag list (one git call) -> latest/oldest semver + membership
 MERGED_TAGS=""
@@ -734,13 +813,43 @@ LATEST_TAG=""
 OLDEST_TAG=""
 if [ -n "$R_MAIN" ]; then
   capture_all MERGED_TAGS git tag --list --merged "$R_MAIN" --sort=-version:refname
+  latest_v=""; oldest_v=""
   while IFS= read -r t; do
     [ -z "$t" ] && continue
-    if is_semver_tag "$t"; then
-      [ -z "$LATEST_TAG" ] && LATEST_TAG=$t
-      OLDEST_TAG=$t
+    is_semver_tag "$t" || continue
+    v=${t#"$TAG_PREFIX"}
+    if [ -z "$LATEST_TAG" ]; then
+      LATEST_TAG=$t; OLDEST_TAG=$t; latest_v=$v; oldest_v=$v
+      continue
     fi
+    version_cmp "$v" "$latest_v"; [ "$VCMP" = 1 ] && { LATEST_TAG=$t; latest_v=$v; }
+    version_cmp "$v" "$oldest_v"; [ "$VCMP" = -1 ] && { OLDEST_TAG=$t; oldest_v=$v; }
   done <<<"$MERGED_TAGS"
+fi
+
+# next hotfix version: above the latest tag AND above every open hotfix branch
+# on the same line (their numbers are taken even before they are tagged)
+NEXT_HOTFIX=""
+if [ -n "$LATEST_TAG" ]; then
+  ver_parts _nh "${LATEST_TAG#"$TAG_PREFIX"}"
+  nh_hot=""; list_branches_v nh_hot "${HOTFIX_PREFIX}*"
+  if [ "$VERSION_SCHEME" = suffix-counter ]; then
+    nh_base="$_nhMaj.$_nhMin.$_nhPat"; nh_n=0
+    [ "$_nhKind" = 1 ] && nh_n=$_nhRest
+    while IFS= read -r br; do
+      counter_version_parts "${br#"$HOTFIX_PREFIX"}" || continue
+      [ "$CV_BASE" = "$nh_base" ] && [ "$CV_N" -gt "$nh_n" ] && nh_n=$CV_N
+    done <<<"$nh_hot"
+    NEXT_HOTFIX="$nh_base$HOTFIX_INFIX$((10#$nh_n + 1))"
+  else
+    nh_p=$_nhPat
+    while IFS= read -r br; do
+      v=${br#"$HOTFIX_PREFIX"}
+      [[ $v =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || continue
+      [ "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" = "$_nhMaj.$_nhMin" ] && [ "${BASH_REMATCH[3]}" -gt "$nh_p" ] && nh_p=${BASH_REMATCH[3]}
+    done <<<"$nh_hot"
+    NEXT_HOTFIX="$_nhMaj.$_nhMin.$((10#$nh_p + 1))"
+  fi
 fi
 tag_on_main() { # tag name — membership in the merged-into-main list
   local t
@@ -1475,12 +1584,14 @@ else
           "\"branch\":\"$J\",\"tag\":\"$JT\"" "$FIX" orphaned-release-branch high "$br"
         continue
       fi
-      if [ "$kind" = release ] && [ -n "$LATEST_TAG" ] && [[ $ver =~ $SEMVER_RE ]]; then
+      if [ -n "$LATEST_TAG" ] && [[ $ver =~ $SEMVER_RE ]]; then
         latest_ver=${LATEST_TAG#"$TAG_PREFIX"}
-        if semver_le "$ver" "$latest_ver"; then
+        if version_le "$ver" "$latest_ver"; then
           coll_found=1
+          pfx=$RELEASE_PREFIX; [ "$kind" = hotfix ] && pfx=$HOTFIX_PREFIX
+          nv="<next-version>"; [ "$kind" = hotfix ] && [ -n "$NEXT_HOTFIX" ] && nv=$NEXT_HOTFIX
           json_str_v J "$br"; json_str_v JT "$LATEST_TAG"
-          json_arr_v FIX "git branch -m $br ${RELEASE_PREFIX}<next-version>" "git push origin :$br ${RELEASE_PREFIX}<next-version>"
+          json_arr_v FIX "git branch -m $br $pfx$nv" "git push origin :$br $pfx$nv"
           fail_check release-version-collision warning "$br targets version $ver but $LATEST_TAG is already released" \
             "\"branch\":\"$J\",\"latestTag\":\"$JT\"" "$FIX" release-version-collision high "$br"
         fi
@@ -1775,7 +1886,8 @@ if any_enabled branch-bad-version-name; then
     ver=""
     case "$br" in
       "$RELEASE_PREFIX"*) ver=${br#"$RELEASE_PREFIX"} ;;
-      "$HOTFIX_PREFIX"*) ver=${br#"$HOTFIX_PREFIX"} ;;
+      "$HOTFIX_PREFIX"*) ver=${br#"$HOTFIX_PREFIX"}
+        counter_version_parts "$ver" && continue ;; # suffix-counter hotfix names are first-class
       *) continue ;;
     esac
     if ! [[ $ver =~ $RELEASE_NAME_RE ]]; then

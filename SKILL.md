@@ -50,7 +50,8 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --format json [flags]
   `--feature-prefix`, `--release-prefix`, `--hotfix-prefix`,
   `--backmerge-prefix`, `--stale-days`, `--scan-depth`, `--max-releases`,
   `--merge-mode`, `--ignore-branches`, `--ignore-tags`, `--ignore-shas`,
-  `--ignore-findings`, `--allow-prerelease`, and one
+  `--ignore-findings`, `--allow-prerelease`, `--version-scheme <versionScheme.scheme>`
+  and `--hotfix-pattern <versionScheme.hotfixPattern>` when set, and one
   `--version-file <path> --version-pattern <ERE>` pair per configured version
   file (pattern = POSIX ERE, capture group 1 is the version), plus
   `--changelog <changelog.file>` unless `changelog.enabled` is false (default:
@@ -134,7 +135,9 @@ it. The mutating set is exactly:
 ## Status
 
 Run the full doctor once, then present: current branch + type, ahead/behind
-for main/develop, open flow branches, latest tag, suggested next version
+for main/develop, open flow branches, latest tag (`repo.versions.latestTag` —
+never re-derive it with `git tag --sort`, which obeys the user's
+`versionsort.suffix`), suggested next version
 (references/start-and-init.md § Version suggestion), open PRs
 (`gh pr list --state open` when gh available), and any findings.
 

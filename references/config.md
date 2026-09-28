@@ -17,6 +17,7 @@ few scalar keys for standalone runs — see § Config fallback).
   "versionFiles": [ { "path": "package.json", "preset": "package-json" } ],
   "changelog": { "enabled": true, "file": "CHANGELOG.md", "convention": "conventional-commits" },
   "release": { "maxConcurrent": 1, "allowPrerelease": false, "githubRelease": true, "signedTags": false },
+  "versionScheme": { "scheme": "semver", "hotfixPattern": "{base}-hotfix.{n}" },
   "backmerge": { "strategy": "merge-tag", "conflictPolicy": { "versionFiles": "higher", "changelog": "union" } },
   "github": { "defaultBranch": "develop" },
   "homebrew": { "tap": "cagatayuncu/homebrew-tap", "formula": "Formula/gitdoctor.rb" },
@@ -36,6 +37,7 @@ few scalar keys for standalone runs — see § Config fallback).
 | mergeMode | `--merge-mode auto\|pr\|local` |
 | release.maxConcurrent | `--max-releases` |
 | release.allowPrerelease | `--allow-prerelease` |
+| versionScheme.scheme / versionScheme.hotfixPattern | `--version-scheme semver\|suffix-counter` / `--hotfix-pattern '{base}-hotfix.{n}'` |
 | release.githubRelease: false | `--no-github-release` (gh-release-missing-for-tag reports `skipped`) |
 | release.signedTags: true | `--require-signed-tags` (enables tag-unsigned) |
 | changelog.enabled (default true) / changelog.file | `--changelog <file>` (enables changelog-tag-mismatch; omit when disabled) |
@@ -59,6 +61,17 @@ few scalar keys for standalone runs — see § Config fallback).
 - **versionFiles[]**: `path` (repo-relative) plus either `preset`
   (references/version-files.md) or a raw `pattern` (POSIX ERE, capture group 1
   = current version) and `replace` (string with `{version}` placeholder).
+- **versionScheme**: how versions ORDER. The doctor sorts in bash, never with
+  `git tag --sort` (which obeys the user's `versionsort.suffix`), and reports
+  the result as `repo.versions` (`scheme`, `latestTag`, `nextHotfix`).
+  - `semver` (default): SemVer 2.0 precedence — `2.0.0-rc.10` > `2.0.0-rc.2`,
+    and `2.0.0` > every `2.0.0-*` prerelease.
+  - `suffix-counter`: hotfixes are post-releases named by `hotfixPattern`
+    (`{base}` = X.Y.Z, `{n}` = counter; the text between must start with `-`
+    and must not end in a digit). `2.0.0` < `2.0.0-hotfix.9` <
+    `2.0.0-hotfix.12` < `2.0.1`. Branch names `hotfix/2.0.0-hotfix.12` are
+    valid without `allowPrerelease`, and the next hotfix is the same base with
+    counter + 1. Pair it with `"tagPrefix": ""` when tags carry no `v`.
 - **backmerge.strategy**: `merge-tag` (default; guarantees main ⊂ develop) or
   `merge-branch` (nvie-literal: merge the release branch itself).
 - **backmerge.conflictPolicy**: `versionFiles: "higher"` keeps the greater
@@ -83,7 +96,8 @@ few scalar keys for standalone runs — see § Config fallback).
 Without the agent, the doctor scans these scalar keys itself (pure bash, any
 formatting, several keys per line): `"main"`,
 `"develop"`, `"tagPrefix"`, `"mergeMode"`, `"staleDays"`, `"maxConcurrent"`,
-`"githubRelease"`, `"signedTags"`, `"tap"`, `"formula"`, and the `"changelog"`
+`"githubRelease"`, `"signedTags"`, `"tap"`, `"formula"`, `"scheme"`,
+`"hotfixPattern"`, and the `"changelog"`
 block (`"enabled"`, `"file"`; a block without `file` means `CHANGELOG.md`). Constraint: each of
 those KEY NAMES must appear exactly once in the file (the schema above
 satisfies this — `main`/`develop` appear elsewhere only as values, never as

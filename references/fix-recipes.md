@@ -171,7 +171,11 @@ git branch -d <branch>
 develop — that is a missing back-merge, investigate before forcing `-D`.
 
 ## release-version-collision
-The release branch targets a version ≤ the latest tag. Rename:
+The release or hotfix branch targets a version ≤ the latest tag (SemVer
+precedence; under `versionScheme.scheme: suffix-counter` a hotfix counter is a
+post-release, so `2.0.0-hotfix.11` ≤ `2.0.0-hotfix.12` and `2.0.0` is below
+both). Rename — for a hotfix the doctor's `repo.versions.nextHotfix` is the
+next free number:
 ```bash
 git branch -m release/OLD release/NEW
 git push origin :release/OLD release/NEW
