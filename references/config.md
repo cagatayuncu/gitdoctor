@@ -18,6 +18,9 @@ few scalar keys for standalone runs — see § Config fallback).
   "changelog": { "enabled": true, "file": "CHANGELOG.md", "convention": "conventional-commits" },
   "release": { "maxConcurrent": 1, "allowPrerelease": false, "githubRelease": true, "signedTags": false },
   "versionScheme": { "scheme": "semver", "hotfixPattern": "{base}-hotfix.{n}" },
+  "verify": { "timeoutMinutes": 15,
+              "main": [ { "run": "npm ci && npm test", "sideEffects": "rewrites node_modules" } ],
+              "develop": [ { "run": "npm ci && npm test" } ] },
   "messages": { "mergeToMain": "Release {version}", "backMerge": "Back-merge release {version}", "tag": "Release {version}" },
   "backmerge": { "strategy": "merge-tag", "conflictPolicy": { "versionFiles": "higher", "changelog": "union" } },
   "github": { "defaultBranch": "develop" },
@@ -73,6 +76,14 @@ few scalar keys for standalone runs — see § Config fallback).
     `2.0.0-hotfix.12` < `2.0.1`. Branch names `hotfix/2.0.0-hotfix.12` are
     valid without `allowPrerelease`, and the next hotfix is the same base with
     counter + 1. Pair it with `"tagPrefix": ""` when tags carry no `v`.
+- **verify**: agent-side. Commands run after a LOCAL merge and before its
+  push: `main` on the merged main (before tagging), `develop` on the merged
+  back-merge target. Entries: `run` (shell command, run with `pipefail`),
+  optional `expect` (path glob the run must create/update — for tools that
+  exit 0 without working) and `sideEffects` (shown to the user).
+  `timeoutMinutes` defaults to 15. The agent reads this block from
+  `origin/<main>`, never from the branch being finished, and asks before the
+  first run in a session (finish-release.md § Verify). PR mode relies on CI.
 - **messages**: agent-side (no doctor flag). Templates for the merge commit
   into main (`mergeToMain`), the back-merge commit (`backMerge`) and the
   annotated tag message (`tag`). Placeholders: `{branch}` (`release/1.2.0`),

@@ -227,6 +227,24 @@
         }
       }
     },
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Commands the agent runs after a local merge and before its push (read from origin/<main>, confirmed by the user).",
+      "properties": {
+        "timeoutMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 15
+        },
+        "main": {
+          "$ref": "#/definitions/verifySteps"
+        },
+        "develop": {
+          "$ref": "#/definitions/verifySteps"
+        }
+      }
+    },
     "messages": {
       "type": "object",
       "additionalProperties": false,
@@ -369,6 +387,32 @@
         "formula": {
           "type": "string",
           "description": "Formula path inside the tap, e.g. Formula/gitdoctor.rb."
+        }
+      }
+    }
+  },
+  "definitions": {
+    "verifySteps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run"
+        ],
+        "properties": {
+          "run": {
+            "type": "string",
+            "description": "Shell command; run with pipefail from the repo root."
+          },
+          "expect": {
+            "type": "string",
+            "description": "Path glob the run must create or update (catches tools that exit 0 without working)."
+          },
+          "sideEffects": {
+            "type": "string",
+            "description": "What the command changes outside the tree, shown to the user."
+          }
         }
       }
     }
