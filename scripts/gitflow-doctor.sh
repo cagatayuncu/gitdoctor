@@ -622,27 +622,27 @@ ws_tag_facts() { # repo-dir main-name -> WT_EXISTS WT_TYPE WT_MSG WT_ONTIP
 }
 
 ws_branch_json_v() { # varname repo-dir self -> ,"branch":{...}[,"probe":{...}]
-  local __wb_v=$1 bl="" jb kind="" ver="" pr="" pj=null
-  capture bl git -C "$2" for-each-ref --format='%(refname)' "refs/heads/$PROBE_BRANCH" "refs/remotes/origin/$PROBE_BRANCH"
-  json_str_v jb "$PROBE_BRANCH"
-  if [ -z "$bl" ]; then
-    printf -v "$__wb_v" ',"branch":{"name":"%s","present":false,"skipped":"no branch"}' "$jb"
+  local __wb_v=$1 __wb_bl="" __wb_jb __wb_kind="" __wb_ver="" __wb_pr="" __wb_pj=null
+  capture __wb_bl git -C "$2" for-each-ref --format='%(refname)' "refs/heads/$PROBE_BRANCH" "refs/remotes/origin/$PROBE_BRANCH"
+  json_str_v __wb_jb "$PROBE_BRANCH"
+  if [ -z "$__wb_bl" ]; then
+    printf -v "$__wb_v" ',"branch":{"name":"%s","present":false,"skipped":"no branch"}' "$__wb_jb"
     return 0
   fi
   case "$PROBE_BRANCH" in
-    "$RELEASE_PREFIX"*) kind=finish-release; ver=${PROBE_BRANCH#"$RELEASE_PREFIX"} ;;
-    "$HOTFIX_PREFIX"*) kind=finish-hotfix; ver=${PROBE_BRANCH#"$HOTFIX_PREFIX"} ;;
-    "$FEATURE_PREFIX"*) kind=finish-feature ;;
+    "$RELEASE_PREFIX"*) __wb_kind=finish-release; __wb_ver=${PROBE_BRANCH#"$RELEASE_PREFIX"} ;;
+    "$HOTFIX_PREFIX"*) __wb_kind=finish-hotfix; __wb_ver=${PROBE_BRANCH#"$HOTFIX_PREFIX"} ;;
+    "$FEATURE_PREFIX"*) __wb_kind=finish-feature ;;
   esac
-  if [ -n "$ver" ]; then
+  if [ -n "$__wb_ver" ]; then
     # shellcheck disable=SC2086 # WS_PASS is a flag list, split on purpose
-    capture pr in_repo "$2" bash "$3" --probe "$kind" --branch "$PROBE_BRANCH" --version "$ver" $WS_PASS
-  elif [ -n "$kind" ]; then
+    capture __wb_pr in_repo "$2" bash "$3" --probe "$__wb_kind" --branch "$PROBE_BRANCH" --version "$__wb_ver" $WS_PASS
+  elif [ -n "$__wb_kind" ]; then
     # shellcheck disable=SC2086
-    capture pr in_repo "$2" bash "$3" --probe "$kind" --branch "$PROBE_BRANCH" $WS_PASS
+    capture __wb_pr in_repo "$2" bash "$3" --probe "$__wb_kind" --branch "$PROBE_BRANCH" $WS_PASS
   fi
-  [ -n "$pr" ] && pj=$pr
-  printf -v "$__wb_v" ',"branch":{"name":"%s","present":true},"probe":%s' "$jb" "$pj"
+  [ -n "$__wb_pr" ] && __wb_pj=$__wb_pr
+  printf -v "$__wb_v" ',"branch":{"name":"%s","present":true},"probe":%s' "$__wb_jb" "$__wb_pj"
 }
 
 run_workspace() {
