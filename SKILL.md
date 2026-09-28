@@ -110,7 +110,10 @@ bash <skill-dir>/scripts/gitflow-doctor.sh --probe finish-release --branch relea
 (`finish-hotfix`, `finish-feature` likewise; feature takes no `--version`.)
 Steps report `done:true/false` with evidence. Skip done steps, execute the
 first pending one, re-probe after each mutation. Details per flow in the
-finish references. Probe `warnings` are STOP signals (tag divergence).
+finish references. Probe `warnings` about tag divergence are STOP signals;
+conflict-forecast and hotfix-order warnings are shown to the user before any
+merge. The probe's `forecast` object lists the paths each pending merge leg
+would conflict on — surface it before merging, never discover it mid-merge.
 `--dry-run` from the user → see Dry-run contract below.
 
 ## Dry-run contract
@@ -139,7 +142,9 @@ for main/develop, open flow branches, latest tag (`repo.versions.latestTag` —
 never re-derive it with `git tag --sort`, which obeys the user's
 `versionsort.suffix`), suggested next version
 (references/start-and-init.md § Version suggestion), open PRs
-(`gh pr list --state open` when gh available), and any findings.
+(`gh pr list --state open` when gh available), and any findings. With
+several hotfixes open, render `multiple-hotfix-branches` `data.branches` as a
+table in finish order (`branch  base=<tag>  behind=<n>  conflict:<paths>|clean`).
 
 ## Cleanup
 

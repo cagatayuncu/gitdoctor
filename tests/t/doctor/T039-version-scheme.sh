@@ -61,7 +61,7 @@ git tag -a v2.0.0-rc.10 -m rc10
 git tag -a v2.0.0-rc.2 -m rc2
 git push -q origin --tags
 run_doctor --checks non-semver-tag
-assert_versions '"versions":{"scheme":"semver","latestTag":"v2.0.0-rc.10","nextHotfix":"2.0.1"}'
+assert_versions '"versions":{"scheme":"semver","latestTag":"v2.0.0-rc.10","nextHotfix":""}'
 # regression: release/2.0.0 outranks its own prereleases — the old
 # suffix-stripping comparison called this a collision with v2.0.0-rc.10
 git switch -qc release/2.0.0 develop

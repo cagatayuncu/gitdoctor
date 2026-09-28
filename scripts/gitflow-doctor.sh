@@ -166,7 +166,7 @@ case "$VERSION_SCHEME" in ''|semver|suffix-counter) : ;; *) die_usage "--version
 # ---------------------------------------------------------------------------
 # Check catalog (the authoritative id list; README/action counts derive from it)
 # ---------------------------------------------------------------------------
-ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift multiple-release-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale"
+ALL_CHECK_IDS="env-not-a-repo env-no-origin env-origin-not-github env-gh-unavailable env-fetch-failed env-missing-main env-missing-develop env-shallow-clone env-git-too-old dirty-worktree detached-head operation-in-progress sync-behind sync-ahead sync-diverged missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift flow-branch-behind-main multiple-release-branches multiple-hotfix-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main non-semver-tag duplicate-tag-target tag-prefix-collision tag-lightweight-release tag-unsigned tag-unpushed tag-sha-mismatch branch-stale-merged branch-stale-inactive branch-bad-version-name branch-unrecognized gh-protection-missing-main gh-protection-missing-develop gh-default-branch-unexpected gh-open-pr-wrong-base gh-squash-only-back-merge-limitation gh-release-missing-for-tag homebrew-formula-stale"
 RECIPES_URL="https://github.com/cagatayuncu/gitdoctor/blob/main/references/fix-recipes.md"
 
 known_check_id() { case " $ALL_CHECK_IDS " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -830,8 +830,10 @@ fi
 # next hotfix version: above the latest tag AND above every open hotfix branch
 # on the same line (their numbers are taken even before they are tagged)
 NEXT_HOTFIX=""
-if [ -n "$LATEST_TAG" ]; then
-  ver_parts _nh "${LATEST_TAG#"$TAG_PREFIX"}"
+[ -n "$LATEST_TAG" ] && ver_parts _nh "${LATEST_TAG#"$TAG_PREFIX"}"
+# a prerelease as the latest tag means X.Y.Z itself never shipped: there is
+# nothing to hotfix yet, so no suggestion (the agent asks the user)
+if [ -n "$LATEST_TAG" ] && [ "$_nhKind" != -1 ]; then
   nh_hot=""; list_branches_v nh_hot "${HOTFIX_PREFIX}*"
   if [ "$VERSION_SCHEME" = suffix-counter ]; then
     nh_base="$_nhMaj.$_nhMin.$_nhPat"; nh_n=0
@@ -905,6 +907,66 @@ open_releases_v() { # varname newline-list -> entries that have NOT shipped yet
 conflicts_predicted() { # ref_a ref_b
   [ "$MERGETREE_OK" = 1 ] || return 1
   ! git merge-tree --write-tree --no-messages "$1" "$2" >/dev/null 2>&1
+}
+
+merge_conflicts_v() { # varname ref_a ref_b -> newline list of paths the merge would conflict on
+  # One merge-tree call; output is the tree oid, then one conflicted path per
+  # line. Empty when clean, when merge-tree is unavailable, or on error.
+  local __mc_v=$1 __mc_out="" __mc_line __mc_acc="" __mc_first=1
+  clear_v "$__mc_v"
+  [ "$MERGETREE_OK" = 1 ] || return 0
+  capture_all __mc_out git merge-tree --write-tree --name-only --no-messages "$2" "$3"
+  while IFS= read -r __mc_line; do
+    if [ "$__mc_first" = 1 ]; then __mc_first=0; continue; fi
+    [ -z "$__mc_line" ] && continue
+    case "$NL$__mc_acc$NL" in *"$NL$__mc_line$NL"*) continue ;; esac
+    __mc_acc="$__mc_acc${__mc_acc:+$NL}$__mc_line"
+  done <<<"$__mc_out"
+  [ -n "$__mc_acc" ] && printf -v "$__mc_v" '%s' "$__mc_acc"
+  return 0
+}
+
+json_lines_v() { # varname newline-list -> JSON array of strings
+  local __jl_v=$1 __jl_line __jl_e __jl_out=""
+  while IFS= read -r __jl_line; do
+    [ -z "$__jl_line" ] && continue
+    json_str_v __jl_e "$__jl_line"
+    __jl_out="$__jl_out${__jl_out:+,}\"$__jl_e\""
+  done <<<"$2"
+  printf -v "$__jl_v" '[%s]' "$__jl_out"
+}
+
+open_hotfixes_v() { # varname newline-list -> hotfix branches whose tag does not exist yet
+  local __oh_v=$1 __oh_br __oh_out=""
+  while IFS= read -r __oh_br; do
+    [ -z "$__oh_br" ] && continue
+    tag_exists "${TAG_PREFIX}${__oh_br#"$HOTFIX_PREFIX"}" && continue
+    __oh_out="$__oh_out${__oh_out:+$NL}$__oh_br"
+  done <<<"$2"
+  clear_v "$__oh_v"
+  [ -n "$__oh_out" ] && printf -v "$__oh_v" '%s' "$__oh_out"
+  return 0
+}
+
+sort_by_version_v() { # varname newline-list-of-branches prefix -> same list, ascending version
+  local __sv_v=$1 __sv_pfx=$3 __sv_br __sv_out="" __sv_rest __sv_x __sv_new __sv_done
+  while IFS= read -r __sv_br; do
+    [ -z "$__sv_br" ] && continue
+    __sv_new=""; __sv_done=0; __sv_rest=$__sv_out
+    while IFS= read -r __sv_x; do
+      [ -z "$__sv_x" ] && continue
+      if [ "$__sv_done" = 0 ]; then
+        version_cmp "${__sv_br#"$__sv_pfx"}" "${__sv_x#"$__sv_pfx"}"
+        if [ "$VCMP" = -1 ]; then __sv_new="$__sv_new${__sv_new:+$NL}$__sv_br"; __sv_done=1; fi
+      fi
+      __sv_new="$__sv_new${__sv_new:+$NL}$__sv_x"
+    done <<<"$__sv_rest"
+    [ "$__sv_done" = 0 ] && __sv_new="$__sv_new${__sv_new:+$NL}$__sv_br"
+    __sv_out=$__sv_new
+  done <<<"$2"
+  clear_v "$__sv_v"
+  [ -n "$__sv_out" ] && printf -v "$__sv_v" '%s' "$__sv_out"
+  return 0
 }
 
 extract_version_v() { # varname ref path pattern — ERE with capture group 1, one process
@@ -1014,8 +1076,15 @@ probe_merged_into() { # branch target_ref
   return 1
 }
 
+PROBE_FORECAST=""
+forecast_warning() { # conflict-list target-name
+  [ -n "$1" ] || return 0
+  local __fw_list=${1//$NL/, }
+  add_probe_warning "conflicts predicted merging $PROBE_BRANCH into $2: $__fw_list — resolve on the branch before the finish (fix-recipes.md#flow-branch-behind-main)"
+}
+
 run_probe() {
-  local tag="${TAG_PREFIX}${PROBE_VERSION}" bref jt jb
+  local tag="${TAG_PREFIX}${PROBE_VERSION}" bref jt jb fc_main="" fc_bm="" fc_dev="" jfm jfb jfd
   branch_ref_v bref "$PROBE_BRANCH"
 
   if [ "$PROBE" = finish-feature ]; then
@@ -1026,6 +1095,12 @@ run_probe() {
     fi
     json_str_v jt "$MERGE_VIA"
     add_step merged-to-develop "$MERGED" "\"via\":\"$jt\""
+    if [ "$MERGED" = false ] && [ -n "$bref" ]; then
+      merge_conflicts_v fc_dev "$R_DEV" "$bref"
+      forecast_warning "$fc_dev" "$DEVELOP"
+    fi
+    json_lines_v jfd "$fc_dev"
+    PROBE_FORECAST="\"develop\":$jfd"
   else
     # version-bumped
     if [ "$VF_COUNT" -eq 0 ]; then
@@ -1065,6 +1140,22 @@ run_probe() {
     local main_merge_sha=$MERGE_SHA
     json_str_v jt "$MERGE_VIA"
     add_step merged-to-main "$MERGED" "\"sha\":\"$MERGE_SHA\",\"via\":\"$jt\""
+    if [ "$MERGED" = false ] && [ -n "$bref" ] && [ -n "$R_MAIN" ]; then
+      merge_conflicts_v fc_main "$R_MAIN" "$bref"
+      forecast_warning "$fc_main" "$MAIN"
+    fi
+
+    # hotfixes finished out of version order: allowed, but say so
+    if [ "$PROBE" = finish-hotfix ]; then
+      local hot_all="" hot_open="" hb
+      list_branches_v hot_all "${HOTFIX_PREFIX}*"
+      open_hotfixes_v hot_open "$hot_all"
+      while IFS= read -r hb; do
+        [ -z "$hb" ] || [ "$hb" = "$PROBE_BRANCH" ] && continue
+        version_cmp "${hb#"$HOTFIX_PREFIX"}" "$PROBE_VERSION"
+        [ "$VCMP" = -1 ] && add_probe_warning "$hb is still open with a lower version — finishing $PROBE_BRANCH first puts tags and $MAIN merges out of order (allowed; tell the user)"
+      done <<<"$hot_open"
+    fi
 
     # tag-exists (+ divergence guard)
     if tag_exists "$tag"; then
@@ -1135,8 +1226,14 @@ run_probe() {
         add_step back-merged true "\"target\":\"$jb\",\"mode\":\"content\"$extra"
       else
         add_step back-merged false "\"target\":\"$jb\",\"mode\":\"ancestry\"$extra"
+        # before the tag exists the branch stands in for it (merge-branch
+        # semantics; merge-tag usually conflicts less, never more on these paths)
+        merge_conflicts_v fc_bm "$tref" "$src"
+        forecast_warning "$fc_bm" "$bm_target"
       fi
     fi
+    json_lines_v jfm "$fc_main"; json_lines_v jfb "$fc_bm"
+    PROBE_FORECAST="\"main\":$jfm,\"backMerge\":$jfb"
   fi
 
   # remote-branch-deleted
@@ -1187,8 +1284,8 @@ run_probe() {
   fi
 
   json_str_v jb "$PROBE_BRANCH"; json_str_v jt "$PROBE_VERSION"
-  printf '{"gitflowDoctor":"%s","probe":"%s","branch":"%s","version":"%s","steps":[%s],"warnings":[%s]}\n' \
-    "$DOCTOR_VERSION" "$PROBE" "$jb" "$jt" "$PROBE_STEPS" "$PROBE_WARNINGS"
+  printf '{"gitflowDoctor":"%s","probe":"%s","branch":"%s","version":"%s","steps":[%s],"warnings":[%s],"forecast":{%s}}\n' \
+    "$DOCTOR_VERSION" "$PROBE" "$jb" "$jt" "$PROBE_STEPS" "$PROBE_WARNINGS" "$PROBE_FORECAST"
   exit 0
 }
 
@@ -1349,7 +1446,7 @@ if any_enabled sync-behind sync-ahead sync-diverged; then
 fi
 
 # --- A.4 topology + A.5/A.6 checks that need both branches -------------------
-TOPO_IDS="missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift multiple-release-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main branch-stale-merged branch-stale-inactive"
+TOPO_IDS="missing-back-merge back-merge-content-only untagged-merge-on-main direct-commit-on-main wrong-base-feature wrong-base-hotfix release-develop-drift flow-branch-behind-main multiple-release-branches multiple-hotfix-branches orphaned-release-branch orphaned-hotfix-branch release-version-collision version-file-tag-mismatch changelog-tag-mismatch tag-not-on-main branch-stale-merged branch-stale-inactive"
 if [ -z "$R_MAIN" ] || [ -z "$R_DEV" ]; then
   for id in $TOPO_IDS; do skip_check "$id" "missing-main-or-develop"; done
 else
@@ -1558,6 +1655,69 @@ else
       fi
     done <<<"$OPEN_RELEASES"
     [ "$drift_found" = 0 ] && ok_check release-develop-drift
+  fi
+
+  # open release/hotfix branches that main moved past: forecast both finish legs
+  OPEN_HOTFIXES=""; open_hotfixes_v OPEN_HOTFIXES "$HOTFIXES"
+  FB_FACTS="" # br US behind US main-conflicts-json (reused by multiple-hotfix-branches)
+  if any_enabled flow-branch-behind-main multiple-hotfix-branches; then
+    fb_found=0
+    while IFS= read -r br; do
+      [ -z "$br" ] && continue
+      branch_ref_v ref "$br"; [ -z "$ref" ] && continue
+      behind=""
+      capture behind git rev-list --count "$ref..$R_MAIN"
+      behind=${behind:-0}
+      mc=""; dc=""
+      if [ "$behind" -gt 0 ]; then
+        merge_conflicts_v mc "$R_MAIN" "$ref"
+        merge_conflicts_v dc "$R_DEV" "$ref"
+      fi
+      json_lines_v MCJ "$mc"; json_lines_v DCJ "$dc"
+      FB_FACTS="$FB_FACTS${FB_FACTS:+$NL}$br$US$behind$US$MCJ"
+      [ "$behind" -gt 0 ] || continue
+      fb_found=1
+      sev=info; title="$br is $behind commit(s) behind $MAIN"
+      if [ -n "$mc$dc" ]; then
+        sev=warning; count_lines_v nconf "$mc$NL$dc"
+        title="$title — its finish would conflict ($nconf path(s); resolve on the branch first)"
+      fi
+      json_str_v J "$br"
+      json_arr_v FIX "git switch $br && git merge origin/$MAIN" "resolve on $br (its author knows the change), then: git push origin $br"
+      fail_check flow-branch-behind-main "$sev" "$title" \
+        "\"branch\":\"$J\",\"behind\":$behind,\"conflicts\":{\"main\":$MCJ,\"develop\":$DCJ}" \
+        "$FIX" flow-branch-behind-main "$ANCESTRY_CONF" "$br"
+    done <<<"$OPEN_HOTFIXES$NL$OPEN_RELEASES"
+    [ "$fb_found" = 0 ] && ok_check flow-branch-behind-main
+  fi
+
+  # several open hotfixes: show base, lag and conflicts in finish order
+  if any_enabled multiple-hotfix-branches; then
+    hot_count=0
+    count_lines_v hot_count "$OPEN_HOTFIXES"
+    if [ "$hot_count" -gt 1 ]; then
+      sort_by_version_v SORTED_HOT "$OPEN_HOTFIXES" "$HOTFIX_PREFIX"
+      HOT_ARR=""; first_hot=""
+      while IFS= read -r br; do
+        [ -z "$br" ] && continue
+        [ -z "$first_hot" ] && first_hot=$br
+        branch_ref_v ref "$br"
+        base=""
+        [ -n "$ref" ] && capture base git describe --tags --abbrev=0 --match "${TAG_PREFIX}[0-9]*" "$ref"
+        fact=""; behind=0; MCJ="[]"
+        while IFS= read -r fact; do
+          case "$fact" in "$br$US"*) fact=${fact#*"$US"}; behind=${fact%%"$US"*}; MCJ=${fact#*"$US"}; break ;; esac
+        done <<<"$FB_FACTS"
+        json_str_v J "$br"; json_str_v JV "${br#"$HOTFIX_PREFIX"}"; json_str_v JB "$base"
+        HOT_ARR="$HOT_ARR${HOT_ARR:+,}{\"branch\":\"$J\",\"version\":\"$JV\",\"base\":\"$JB\",\"behind\":$behind,\"mainConflicts\":$MCJ}"
+      done <<<"$SORTED_HOT"
+      json_str_v J "$first_hot"
+      json_arr_v FIX "finish in version order, starting with $first_hot" "a branch behind $MAIN: merge $MAIN into it first (flow-branch-behind-main)"
+      fail_check multiple-hotfix-branches info "$hot_count hotfix branches open at once — finish order matters" \
+        "\"branches\":[$HOT_ARR],\"finishFirst\":\"$J\"" "$FIX" multiple-hotfix-branches
+    else
+      ok_check multiple-hotfix-branches
+    fi
   fi
 
   if any_enabled orphaned-release-branch orphaned-hotfix-branch release-version-collision; then
