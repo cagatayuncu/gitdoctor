@@ -25,7 +25,7 @@ set -f # no pathname expansion: ref names may contain *?[ and several list
 LC_ALL=C
 export LC_ALL
 
-DOCTOR_VERSION="0.4.0"
+DOCTOR_VERSION="0.4.1"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 RELEASE_NAME_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 RELEASE_NAME_PRE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
@@ -843,6 +843,7 @@ if [ "$OFFLINE" = 1 ] && ! remote_is_local; then LS_REMOTE_OK=0; fi
 # "before" picture. Exit 0 = every push is safe, 1 = stop and re-probe.
 # ---------------------------------------------------------------------------
 LSR_OK="#ls-remote-ok"
+# shellcheck disable=SC2317 # invoked indirectly through capture_all
 ls_remote_marked() { git ls-remote origin "$@" && printf '%s\n' "$LSR_OK"; }
 run_push_guard() {
   [ "$LS_REMOTE_OK" = 1 ] || { echo "gitflow-doctor: --push-guard needs origin (and no --offline)" >&2; exit 4; }
@@ -882,7 +883,7 @@ run_push_guard() {
     elif [ "$moved" = true ] && [ -n "$t" ] && git merge-base --is-ancestor "$r" "$t" 2>/dev/null; then
       v=rewound; safe=false
     elif git merge-base --is-ancestor "$r" "$l" 2>/dev/null; then
-      v=clean; [ "$moved" = true ] && v=moved-ancestor
+      v=clean; [ "$moved" = true ] && v="moved-ancestor"
     elif [ "$moved" = true ]; then v=moved; safe=false
     else v=not-fast-forward; safe=false
     fi
