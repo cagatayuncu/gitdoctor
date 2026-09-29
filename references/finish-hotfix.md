@@ -55,4 +55,6 @@ too — a patch release ships through the tap like any other.
 
 Version bump, PR-vs-local main leg, tag placement (`mergeCommit.oid` in PR
 mode), atomic push in local mode, conflict policy, branch deletion rules,
-`gh release create` — identical to finish-release.md steps 1-8.
+`gh release create`, the finish lock and the push guard before every push
+(finish-release.md § Push guard and finish.lock) — identical to
+finish-release.md steps 1-8.

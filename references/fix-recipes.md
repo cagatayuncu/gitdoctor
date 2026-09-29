@@ -61,6 +61,21 @@ A merge/rebase/cherry-pick/revert/bisect is half-done. Either finish it
 (resolve conflicts, `git <op> --continue`) or abort it (`git <op> --abort`,
 `git bisect reset`). Nothing else is safe until the state is clean.
 
+## external-push-detected
+A finish is in progress (`.git/gitflow/finish.lock`) and origin's `main`,
+`develop` or the finishing branch changed since it started through something
+other than this finish: `via:"push"` is a push from this clone by another
+tool (a GUI "finish"), `via:"fetch"` a push from elsewhere that a fetch
+brought in.
+1. Show the user each update: `git log -1 <sha>`. Was it this same work,
+   pushed by another tool, or something new?
+2. `git fetch origin`, re-run the finish probe, and run
+   `--push-guard <branches>` before any further push.
+3. Same work → append `own=<sha>` to the lock and continue. New work → it
+   was never verified by this finish: stop and let the user decide.
+Finish from one tool; do not split a finish between a GUI and this flow.
+A stale lock (a finish that ended without post-flight) → delete it.
+
 ## sync-behind
 ```bash
 git switch <branch>

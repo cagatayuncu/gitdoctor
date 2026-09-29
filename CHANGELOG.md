@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.1 (2026-09-29)
+
+### Features
+- `--push-guard B[,B...]`: run right before a push; one `ls-remote` compares
+  origin now with origin at the last fetch and the local tip. Safe verdicts:
+  `clean`, `moved-ancestor`, `already-pushed`, `new-branch`. Stop verdicts
+  (exit 1): `moved`, `rewound` (origin went back, a push would restore
+  removed commits), `not-fast-forward`, `deleted`, `no-local-branch`,
+  `unknown-branch`, and a failed `ls-remote`. It never fetches
+- `finish.lock` (`.git/gitflow/finish.lock`, written by the agent) records
+  the running finish and every sha it put on origin; the new check
+  `external-push-detected` (52 checks) and the probe's `externalUpdates`
+  name any other update of origin's main, develop or the finishing branch:
+  a GUI push from the same clone (`via:push`) or a teammate's push seen by a
+  fetch (`via:fetch`). A lock for another branch warns of two finishes at
+  once; `core.logAllRefUpdates=false` reports the check as skipped
+- Playbooks run the guard before every push and `gh pr merge`, and the
+  workspace flow runs it in every repo before the first push
+
+### Tests
+- 67 fixtures (push guard verdicts, external pushes via push and fetch)
+
 ## 0.4.0 (2026-09-28)
 
 ### Features

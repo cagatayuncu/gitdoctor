@@ -19,8 +19,11 @@ git pull --ff-only origin feature/<name>    # if a remote copy exists
 git switch develop
 git merge --ff-only origin/develop
 git merge --no-ff feature/<name> -m "Merge feature/<name> into develop"
+bash <skill-dir>/scripts/gitflow-doctor.sh --push-guard develop   # must be safe
 git push origin develop
 ```
+The push guard verdicts and what to do on `safe:false`: finish-release.md
+§ Push guard and finish.lock (a feature finish is short; the lock is optional).
 Conflicts: the probe's `forecast.develop` names them before you merge — show
 it to the user first. Features may conflict with develop in source files — resolve
 interactively with the user (never silently), or abort cleanly and suggest
