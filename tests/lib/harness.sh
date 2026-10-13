@@ -105,6 +105,31 @@ run_doctor_gh() { # gh-enabled run: no --offline (would disable gh), fetch skipp
   set -e
 }
 
+# --- integrations/github-actions/back-merge-pr.sh ----------------------------
+BM_EXIT=0
+
+run_bm() { # script args; status/pr land in $GITHUB_OUTPUT
+  export GITHUB_OUTPUT="$TESTTMP/gh-output"
+  : >"$GITHUB_OUTPUT"
+  set +e
+  bash "$SKILL_ROOT/integrations/github-actions/back-merge-pr.sh" "$@" >"$TESTTMP/bm.out" 2>"$TESTTMP/bm.err"
+  BM_EXIT=$?
+  set -e
+}
+
+bm_log() { cat "$TESTTMP/bm.out" "$TESTTMP/bm.err" "$GITHUB_OUTPUT"; }
+
+assert_bm_status() { # expected-status (exit 0 implied)
+  grep -qx "status=$1" "$GITHUB_OUTPUT" || fail "expected status=$1, got: $(bm_log)"
+  assert_exit 0 "$BM_EXIT"
+}
+
+remote_sha() { git ls-remote origin "refs/heads/$1" | cut -f1; }
+
+pr_creates() { # number of gh pr create calls the stub saw
+  if [ -f "$GH_STUB_DIR/pr-create.log" ]; then grep -c . "$GH_STUB_DIR/pr-create.log"; else echo 0; fi
+}
+
 run_probe_gh() {
   set +e
   bash "$DOCTOR" --no-fetch --now "$NOW" --assume-github acme/demo "$@" \

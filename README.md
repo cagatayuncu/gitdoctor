@@ -405,7 +405,8 @@ half-way, each repo resumes with its own probe walk. See
 
 The doctor's JSON output + exit codes plug into anything: a **GitHub Actions
 PR bot** (live on this repo — one self-updating comment per PR, criticals
-block the merge), a scheduled scan that files an issue, client `pre-push` and
+block the merge), a scheduled scan that files an issue, a back-merge bot that
+opens the main → develop PR when git predicts no conflicts, client `pre-push` and
 server `pre-receive` hooks (both covered by the fixture suite), a
 [pre-commit](https://pre-commit.com) hook definition, SARIF output for GitHub
 code scanning, a cron watcher for repos with no CI, and GitLab/Bitbucket
