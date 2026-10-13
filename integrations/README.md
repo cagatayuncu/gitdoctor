@@ -82,7 +82,11 @@ the gap is still there, so the next run opens it again; disable the workflow
 to pause it. The action reports the outcome as
 `steps.<id>.outputs.back-merge` and `back-merge-pr` (the URL). The same
 script runs anywhere with git + gh: `back-merge-pr.sh --dry-run` reports what
-it would do and changes nothing.
+it would do and changes nothing. Every install ships it next to the doctor:
+`~/.claude/skills/gitdoctor/scripts/back-merge-pr.sh` (install.sh /
+install.ps1), the plugin's `integrations/github-actions/`, and
+`gitdoctor-back-merge-pr` on PATH with Homebrew. It finds the doctor beside
+itself or on PATH (`GITDOCTOR_PATH` overrides).
 
 Setup: the job needs `contents: write` + `pull-requests: write`, and the repo
 must allow it (Settings → Actions → General → Workflow permissions → *Allow
