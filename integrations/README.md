@@ -10,6 +10,7 @@ that runs the script + a channel that delivers the report.**
 | GitHub Actions PR bot | **Live on this repo** (`.github/workflows/gitdoctor-pr.yml`) | [github-actions/gitdoctor-pr.yml](github-actions/gitdoctor-pr.yml) (template) + [github-actions/comment.sh](github-actions/comment.sh) |
 | GitHub Actions scheduled scan | Template | [github-actions/gitdoctor-scheduled.yml](github-actions/gitdoctor-scheduled.yml) |
 | GitHub Actions back-merge PR | Template + action input `back-merge-pr`, script tested (fixture suite) | [github-actions/gitdoctor-back-merge.yml](github-actions/gitdoctor-back-merge.yml) + [github-actions/back-merge-pr.sh](github-actions/back-merge-pr.sh) |
+| GitBot bot | **Draft**, listing rules tested (fixture suite); not yet run in GitBot or published | [gitbot/gitdoctor/](gitbot/gitdoctor/) |
 | Local `pre-push` hook | Tested (fixture suite) | [hooks/pre-push](hooks/pre-push) |
 | Server-side `pre-receive` hook | Tested (fixture suite) | [hooks/pre-receive](hooks/pre-receive) |
 | pre-commit framework | Hook definition, tested (fixture suite) | [.pre-commit-hooks.yaml](../.pre-commit-hooks.yaml) → [hooks/pre-push](hooks/pre-push) |
@@ -135,6 +136,21 @@ Gitea Actions runs GitHub-Actions-format workflows: the PR template works
 as-is on runners whose images ship `gh` and `jq`; otherwise replace the
 comment step with a `curl` against the Gitea API (same shape as the GitLab
 draft). The pre-receive hook works natively on Gitea servers.
+
+## GitBot bot
+
+[GitBot](https://github.com/gitbot-hq/GitBot) runs Claude Code as a named bot
+with one standing job. `gitbot/gitdoctor/` is that job for gitdoctor, in the
+folder format of the [GitBot Library](https://github.com/gitbot-hq/Library)
+(`bots/<slug>/`): diagnose, open the back-merge PR through the same
+`back-merge-pr` tool and gates as the Action, run four mechanical fixes
+(`tag-unpushed`, `branch-stale-merged`, `gh-release-missing-for-tag`,
+`gh-open-pr-wrong-base`) one approval at a time with the doctor's own
+commands, and explain the rest. It never merges, never pushes main or develop,
+never force-pushes. `ask-permissions` mode; `setup.md` checks git ≥ 2.38, `gh`
+signed in and gitdoctor ≥ 0.5.0. The fixture suite replays the Library's
+listing rules (field limits, enums, exactly three features, ≤ 600 words, no
+machine paths) so a publish PR does not bounce on them.
 
 ## AI-agent schedule (zero infrastructure)
 

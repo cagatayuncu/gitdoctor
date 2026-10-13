@@ -55,7 +55,7 @@ if [ -z "$DOCTOR" ]; then
 fi
 
 finish() { # status [pr-url] [message]
-  echo "gitdoctor back-merge: $1${3:+ - $3}"
+  echo "gitdoctor back-merge: $1${3:+ - $3}${2:+ $2}"
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     printf 'status=%s\npr=%s\n' "$1" "${2:-}" >>"$GITHUB_OUTPUT"
   fi
