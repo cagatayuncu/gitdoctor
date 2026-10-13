@@ -42,6 +42,7 @@ assert_bm_status pr-opened
 [ "$(remote_sha backmerge/main)" = "$MAIN_SHA" ] || fail "carrier must point at main's tip: $(bm_log)"
 grep -qF -- "--base develop --head backmerge/main" "$GH_STUB_DIR/pr-create.log" || fail "wrong PR refs: $(cat "$GH_STUB_DIR/pr-create.log")"
 grep -qx "pr=https://github.com/acme/demo/pull/42" "$GITHUB_OUTPUT" || fail "expected the PR url output: $(bm_log)"
+grep -qF "https://github.com/acme/demo/pull/42" "$TESTTMP/bm.out" || fail "the PR url must be on stdout too (agents read it there): $(bm_log)"
 grep -q "Create a merge commit" "$GH_STUB_DIR/pr-body.txt" || fail "PR body must ask for a merge commit"
 grep -q "fix: 1.0.1" "$GH_STUB_DIR/pr-body.txt" || fail "PR body must list the missing commits"
 
