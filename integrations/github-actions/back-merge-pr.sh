@@ -22,22 +22,36 @@
 # Exit 2: usage.
 set -u
 
+USAGE="usage: back-merge-pr.sh [--dry-run]"
 DRY_RUN=0
 case "${1:-}" in
   "") ;;
   --dry-run) DRY_RUN=1 ;;
-  *) echo "usage: back-merge-pr.sh [--dry-run]" >&2; exit 2 ;;
+  -h | --help) echo "$USAGE"; exit 0 ;;
+  *) echo "$USAGE" >&2; exit 2 ;;
 esac
 
 die() { echo "back-merge-pr: $*" >&2; exit 1; }
 
+# Locating the doctor, first match wins:
+#   1. $GITDOCTOR_PATH
+#   2. ../../scripts/gitflow-doctor.sh (a gitdoctor checkout: the Action, the
+#      Claude Code plugin)
+#   3. the same directory: gitflow-doctor.sh (install.sh/.ps1 skill install)
+#      or gitdoctor (Homebrew: bin/gitdoctor next to bin/gitdoctor-back-merge-pr)
+#   4. gitdoctor or gitflow-doctor.sh on PATH
 SELF_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+DOCTOR=""
 if [ -n "${GITDOCTOR_PATH:-}" ] && [ -f "$GITDOCTOR_PATH" ]; then
   DOCTOR=$GITDOCTOR_PATH
-elif [ -n "$SELF_DIR" ] && [ -f "$SELF_DIR/../../scripts/gitflow-doctor.sh" ]; then
-  DOCTOR="$SELF_DIR/../../scripts/gitflow-doctor.sh"
-else
-  die "gitflow-doctor.sh not found (set GITDOCTOR_PATH)"
+elif [ -n "$SELF_DIR" ]; then
+  for cand in "$SELF_DIR/../../scripts/gitflow-doctor.sh" "$SELF_DIR/gitflow-doctor.sh" "$SELF_DIR/gitdoctor"; do
+    if [ -f "$cand" ]; then DOCTOR=$cand; break; fi
+  done
+fi
+if [ -z "$DOCTOR" ]; then
+  DOCTOR=$(command -v gitdoctor 2>/dev/null || command -v gitflow-doctor.sh 2>/dev/null) \
+    || die "gitflow-doctor.sh not found (install gitdoctor, or set GITDOCTOR_PATH)"
 fi
 
 finish() { # status [pr-url] [message]

@@ -20,6 +20,9 @@ mkdir -p "$SKILL_DIR"
 cp "$SRC/SKILL.md" "$SKILL_DIR/"
 rm -rf "$SKILL_DIR/references" "$SKILL_DIR/scripts"
 cp -R "$SRC/references" "$SRC/scripts" "$SKILL_DIR/"
+# the back-merge PR bot runs from the skill too (it finds the doctor beside it)
+BACKMERGE_PR="$SRC/integrations/github-actions/back-merge-pr.sh"
+cp "$BACKMERGE_PR" "$SKILL_DIR/scripts/"
 echo "Claude Code skill installed: $SKILL_DIR"
 
 if [ -n "$CURSOR_REPO" ]; then
@@ -30,5 +33,6 @@ if [ -n "$CURSOR_REPO" ]; then
   cp "$SRC/SKILL.md" "$CMD_DIR/gitdoctor-skill/"
   rm -rf "$CMD_DIR/gitdoctor-skill/references" "$CMD_DIR/gitdoctor-skill/scripts"
   cp -R "$SRC/references" "$SRC/scripts" "$CMD_DIR/gitdoctor-skill/"
+  cp "$BACKMERGE_PR" "$CMD_DIR/gitdoctor-skill/scripts/"
   echo "Cursor command installed: $CMD_DIR/gitdoctor.md (+ gitdoctor-skill payload)"
 fi
