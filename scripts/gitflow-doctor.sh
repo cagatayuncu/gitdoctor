@@ -522,7 +522,11 @@ print_output() {
   local jl jn
   json_str_v jl "${LATEST_TAG:-}"; json_str_v jn "${NEXT_HOTFIX:-}"
   repo="{\"root\":\"$jr\",\"github\":\"$js\",\"main\":\"$jm\",\"develop\":\"$jd\",\"mergeMode\":{\"configured\":\"$MERGE_MODE\",\"resolved\":{\"main\":\"${RESOLVED_MAIN_MODE:-unknown}\",\"develop\":\"${RESOLVED_DEV_MODE:-unknown}\"}}"
-  repo="$repo,\"versions\":{\"scheme\":\"${VERSION_SCHEME:-semver}\",\"latestTag\":\"$jl\",\"nextHotfix\":\"$jn\"}}"
+  repo="$repo,\"versions\":{\"scheme\":\"${VERSION_SCHEME:-semver}\",\"latestTag\":\"$jl\",\"nextHotfix\":\"$jn\"}"
+  local jpf jpr jph jpb
+  json_str_v jpf "$FEATURE_PREFIX"; json_str_v jpr "$RELEASE_PREFIX"
+  json_str_v jph "$HOTFIX_PREFIX"; json_str_v jpb "$BACKMERGE_PREFIX"
+  repo="$repo,\"prefixes\":{\"feature\":\"$jpf\",\"release\":\"$jpr\",\"hotfix\":\"$jph\",\"backmerge\":\"$jpb\"}}"
   case "$FORMAT" in
     text) render_text; return ;;
     markdown) render_markdown; return ;;
@@ -747,7 +751,7 @@ SHALLOW=0; [ "$_shallow" = true ] && SHALLOW=1
 # zero-spawn scan of the scalar keys the doctor understands; the agent passes
 # everything as flags, which always win. Several keys may share one line.
 CONFIG_FILE="$REPO_ROOT/.gitflow.json"
-CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula|scheme|hotfixPattern)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
+CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula|scheme|hotfixPattern|feature|release|hotfix|backmerge)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
 if [ -f "$CONFIG_FILE" ]; then
   CFG_CL_BLOCK=0; CFG_CL_FILE=""; CFG_CL_ENABLED=true
   while IFS= read -r line || [ -n "$line" ]; do
@@ -771,6 +775,14 @@ if [ -f "$CONFIG_FILE" ]; then
         formula) [ -z "$HOMEBREW_FORMULA" ] && HOMEBREW_FORMULA=$val ;;
         scheme) [ -z "$VERSION_SCHEME" ] && VERSION_SCHEME=$val ;;
         hotfixPattern) [ -z "$HOTFIX_PATTERN" ] && HOTFIX_PATTERN=$val ;;
+        feature | release | hotfix | backmerge) # prefixes.*; "{" opens the release/backmerge blocks
+          case "$key:$val" in
+            *: | *:"{") ;;
+            feature:*) [ "$FEATURE_PREFIX" = feature/ ] && FEATURE_PREFIX=$val ;;
+            release:*) [ "$RELEASE_PREFIX" = release/ ] && RELEASE_PREFIX=$val ;;
+            hotfix:*) [ "$HOTFIX_PREFIX" = hotfix/ ] && HOTFIX_PREFIX=$val ;;
+            backmerge:*) [ "$BACKMERGE_PREFIX" = backmerge/ ] && BACKMERGE_PREFIX=$val ;;
+          esac ;;
       esac
     done
   done <"$CONFIG_FILE"

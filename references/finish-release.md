@@ -199,7 +199,11 @@ git merge --no-ff vX.Y.Z -m "<messages.backMerge>"
 # § Push guard: --push-guard develop must be safe
 git push origin develop
 ```
-Develop protected: carrier branch + PR:
+Develop protected: carrier branch + PR. First `gh pr list --state open --base develop`:
+an open PR from `backmerge/*` whose head already contains the tag
+(`git merge-base --is-ancestor vX.Y.Z origin/<head>`), e.g. `backmerge/main`
+opened by the gitdoctor Action, IS this back-merge: take it to the merge
+below instead of opening a second one. Otherwise:
 ```bash
 git switch -c backmerge/release-X.Y.Z vX.Y.Z
 git push -u origin backmerge/release-X.Y.Z

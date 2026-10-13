@@ -57,6 +57,10 @@ few scalar keys for standalone runs — see § Config fallback).
   `branches.main` is not explicitly set, the agent picks whichever alias
   exists in the repo and passes it as `--main`. The doctor's own fallback
   detection special-cases only the literal name `master`.
+- **prefixes**: the doctor echoes the resolved values as `repo.prefixes`
+  (`feature`, `release`, `hotfix`, `backmerge`), so integrations name
+  branches the way the repo does (the back-merge PR carrier is
+  `<backmerge><main>`).
 - **mergeMode**: `auto` resolves per TARGET branch from GitHub's protected
   bit (doctor output `repo.mergeMode.resolved`). `pr` forces PRs even on
   unprotected branches; `local` forces local merges (pushes to protected
@@ -120,9 +124,14 @@ Without the agent, the doctor scans these scalar keys itself (pure bash, any
 formatting, several keys per line): `"main"`,
 `"develop"`, `"tagPrefix"`, `"mergeMode"`, `"staleDays"`, `"maxConcurrent"`,
 `"githubRelease"`, `"signedTags"`, `"tap"`, `"formula"`, `"scheme"`,
-`"hotfixPattern"`, and the `"changelog"`
-block (`"enabled"`, `"file"`; a block without `file` means `CHANGELOG.md`). Constraint: each of
-those KEY NAMES must appear exactly once in the file (the schema above
-satisfies this — `main`/`develop` appear elsewhere only as values, never as
-keys). Everything else — version files, prefixes, ignore lists — is
-agent-only; standalone runs (hooks, CI action) use the defaults for those.
+`"hotfixPattern"`, the `"changelog"`
+block (`"enabled"`, `"file"`; a block without `file` means `CHANGELOG.md`),
+and the `"prefixes"` (`"feature"`, `"release"`, `"hotfix"`, `"backmerge"`).
+Constraint: each of those KEY NAMES must appear exactly once in the file (the
+schema above satisfies this — `main`/`develop` appear elsewhere only as
+values, never as keys). Exception: `"release"` and `"backmerge"` also name
+blocks; an object value (`{`) is read as the block, a string as the prefix.
+A flag wins over the file unless it equals the default (`--release-prefix
+release/` with `"release": "rel/"` in the file gives `rel/`, as `mergeMode`
+does). Everything else — version files, ignore lists — is agent-only;
+standalone runs (hooks, CI action) use the defaults for those.
