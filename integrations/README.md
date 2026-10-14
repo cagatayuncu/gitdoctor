@@ -63,8 +63,9 @@ when main has commits develop lacks. Only when every gate passes:
 - ancestry is certain (`confidence: high` — a shallow checkout never qualifies);
 - `git merge-tree` predicts no conflicts (a conflicting back-merge belongs in
   `/gitdoctor finish` or the recipe, where every resolution is proven);
-- no open `release/*` already contains main's tip (the hotfix flow sends the
-  fix to develop through that release, finish-hotfix.md);
+- the doctor reports no open release carrying main's commits (`carriedBy`:
+  a release that took the hotfix back-merge sends the fix to develop when it
+  finishes, finish-hotfix.md; a release merely cut from main does not count);
 - no back-merge PR into develop is open yet (one from `/gitdoctor finish` in
   PR mode counts; a fork's PR never does). An open `backmerge/main` PR is
   fast-forwarded to the new main instead.

@@ -123,6 +123,12 @@ Variant `back-merge-content-only` (info): the content already reached develop
 via a squash — ancestry repair (the same merge, which will be a no-op
 content-wise) is optional but makes future doctor runs exact.
 
+Variant `carriedBy` (info, `key` = that release): main's tip is in an open
+release that took the hotfix back-merge (finish-hotfix.md § Back-merge target
+selection). Nothing to do now — finishing that release back-merges it into
+develop. Do NOT also merge main into develop. If the release is abandoned
+instead, the finding turns critical and the repair above applies.
+
 ## untagged-merge-on-main
 A release/hotfix merge landed on main without a tag. Identify the version from
 the merged branch name or CHANGELOG, then:
@@ -141,6 +147,9 @@ Commits bypassed the flow. For each sha: verify it is in develop
 
 ## wrong-base-feature
 The branch contains main-only commits (branched from main, or main merged in).
+A release whose main-only commits all arrived through a merge (a hotfix tag
+back-merged into it) is the sanctioned back-merge target and is not flagged;
+a release is flagged when main's commits sit on its own first-parent line.
 If the branch is still private to the user:
 ```bash
 git rebase --onto origin/develop "$(git merge-base origin/main <branch>)" <branch>

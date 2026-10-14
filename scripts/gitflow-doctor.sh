@@ -1183,6 +1183,32 @@ open_releases_v() { # varname newline-list -> entries that have NOT shipped yet
   printf -v "$__or_v" '%s' "$__or_out"
 }
 
+branched_from_main() { # ref -> 0 when main-only commits sit on ref's own first-parent
+  # line (cut from main), not only behind a merge's second parent (a hotfix
+  # tag back-merged into an open release). Unknown counts keep the alarm.
+  local __bf_all="" __bf_own=""
+  capture __bf_all git rev-list --first-parent --count "$1" "^$R_DEV"
+  capture __bf_own git rev-list --first-parent --count "$1" "^$R_DEV" "^$R_MAIN"
+  if [ -z "$__bf_all" ] || [ -z "$__bf_own" ]; then return 0; fi
+  [ "$__bf_all" != "$__bf_own" ]
+}
+
+release_carrying_main_v() { # varname newline-list-of-open-releases -> first one that
+  # holds main's tip by a back-merge (finish-hotfix.md § Back-merge target
+  # selection): main's commits reach develop when that release finishes
+  local __rc_v=$1 __rc_br __rc_ref=""
+  clear_v "$__rc_v"
+  while IFS= read -r __rc_br; do
+    [ -z "$__rc_br" ] && continue
+    branch_ref_v __rc_ref "$__rc_br"; [ -z "$__rc_ref" ] && continue
+    git merge-base --is-ancestor "$R_MAIN" "$__rc_ref" 2>/dev/null || continue
+    branched_from_main "$__rc_ref" && continue
+    printf -v "$__rc_v" '%s' "$__rc_br"
+    return 0
+  done <<<"$2"
+  return 0
+}
+
 conflicts_predicted() { # ref_a ref_b
   [ "$MERGETREE_OK" = 1 ] || return 1
   ! git merge-tree --write-tree --no-messages "$1" "$2" >/dev/null 2>&1
@@ -2040,6 +2066,13 @@ else
   SINCE_ARG=""
   [ -n "$OLDEST_TAG" ] && SINCE_ARG="$OLDEST_TAG.."
 
+  FEATURES=""; RELEASES=""; HOTFIXES=""
+  list_branches_v FEATURES "${FEATURE_PREFIX}*"
+  list_branches_v RELEASES "${RELEASE_PREFIX}*"
+  list_branches_v HOTFIXES "${HOTFIX_PREFIX}*"
+  OPEN_RELEASES=""; open_releases_v OPEN_RELEASES "$RELEASES" # shipped leftovers are not open
+  BM_CARRIER="" # open release holding main's tip by a hotfix back-merge
+
   # missing-back-merge
   if any_enabled missing-back-merge back-merge-content-only; then
     BM_COUNT=""
@@ -2064,10 +2097,22 @@ else
       else
         cp=false
         conflicts_predicted "$R_DEV" "$R_MAIN" && cp=true
-        json_arr_v FIX "git switch $DEVELOP" "git merge --no-ff origin/$MAIN" "git push origin $DEVELOP"
-        fail_check missing-back-merge critical "$MAIN has $BM_COUNT commit(s) not in $DEVELOP" \
-          "\"ahead\":$BM_COUNT,\"commits\":$BM_ARR,\"patchEquivalent\":false,\"conflictsPredicted\":$cp" \
-          "$FIX" missing-back-merge "$ANCESTRY_CONF"
+        release_carrying_main_v BM_CARRIER "$OPEN_RELEASES"
+        if [ -n "$BM_CARRIER" ]; then
+          # keyed by the release: a baseline entry must not also mute the
+          # critical that returns if this release is abandoned
+          json_str_v J "$BM_CARRIER"
+          json_arr_v FIX "nothing now — finishing $BM_CARRIER back-merges them into $DEVELOP" \
+            "only if $BM_CARRIER is abandoned: git switch $DEVELOP && git merge --no-ff origin/$MAIN && git push origin $DEVELOP"
+          fail_check missing-back-merge info "$MAIN has $BM_COUNT commit(s) not in $DEVELOP — carried by open $BM_CARRIER, they reach $DEVELOP when it finishes" \
+            "\"ahead\":$BM_COUNT,\"commits\":$BM_ARR,\"patchEquivalent\":false,\"conflictsPredicted\":$cp,\"carriedBy\":\"$J\"" \
+            "$FIX" missing-back-merge "$ANCESTRY_CONF" "$BM_CARRIER"
+        else
+          json_arr_v FIX "git switch $DEVELOP" "git merge --no-ff origin/$MAIN" "git push origin $DEVELOP"
+          fail_check missing-back-merge critical "$MAIN has $BM_COUNT commit(s) not in $DEVELOP" \
+            "\"ahead\":$BM_COUNT,\"commits\":$BM_ARR,\"patchEquivalent\":false,\"conflictsPredicted\":$cp" \
+            "$FIX" missing-back-merge "$ANCESTRY_CONF"
+        fi
       fi
     else
       ok_check missing-back-merge
@@ -2148,11 +2193,6 @@ else
   fi
 
   # wrong-base: feature + release cut from develop
-  FEATURES=""; RELEASES=""; HOTFIXES=""
-  list_branches_v FEATURES "${FEATURE_PREFIX}*"
-  list_branches_v RELEASES "${RELEASE_PREFIX}*"
-  list_branches_v HOTFIXES "${HOTFIX_PREFIX}*"
-  OPEN_RELEASES=""; open_releases_v OPEN_RELEASES "$RELEASES" # shipped leftovers are not open
   BM_OPEN=0; [ "${BM_COUNT:-0}" -gt 0 ] 2>/dev/null && BM_OPEN=1
 
   if any_enabled wrong-base-feature; then
@@ -2166,6 +2206,12 @@ else
       cnt=""
       capture cnt git rev-list --count "$R_DEV..$mb"
       if [ "${cnt:-0}" -gt 0 ]; then
+        # a release that merged a hotfix tag (the back-merge target) is not mis-based
+        case "$br" in
+          "$RELEASE_PREFIX"*)
+            [ "$br" = "$BM_CARRIER" ] && continue # already proven above
+            branched_from_main "$ref" || continue ;;
+        esac
         wb_found=1
         rel=""
         [ "$BM_OPEN" = 1 ] && rel=",\"relatedFinding\":\"missing-back-merge\""
