@@ -2028,7 +2028,8 @@ else
   GH_MERGED_HEADS=""
   GH_MAIN_PR_LINES=""
   if [ "$GH_MODE" = 1 ] && any_enabled untagged-merge-on-main direct-commit-on-main branch-stale-merged; then
-    capture_all GH_MERGED_HEADS gh pr list --state merged --limit 100 --json headRefName --jq '.[].headRefName'
+    # "<head branch> <head sha at merge>": a name alone is not proof, names get reused
+    capture_all GH_MERGED_HEADS gh pr list --state merged --limit 100 --json headRefName,headRefOid --jq '.[] | "\(.headRefName) \(.headRefOid)"'
     capture_all GH_MAIN_PR_LINES gh pr list --base "$MAIN" --state merged --limit 50 --json headRefName,mergeCommit --jq '.[] | "\(.headRefName) \(.mergeCommit.oid)"'
   fi
 
@@ -2426,7 +2427,12 @@ else
       if git merge-base --is-ancestor "$ref" "$R_DEV" 2>/dev/null; then
         method=ancestry
       elif [ "$GH_MODE" = 1 ] && [ -n "$GH_MERGED_HEADS" ]; then
-        case "$NL$GH_MERGED_HEADS$NL" in *"$NL$br$NL"*) method="gh-pr"; delflag="-D" ;; esac
+        # a merged PR on this name counts only if it merged this tip (or a
+        # descendant of it); a reused name has moved past its merged head
+        while IFS=' ' read -r mh_name mh_oid; do
+          [ "$mh_name" = "$br" ] && [ -n "$mh_oid" ] || continue
+          if git merge-base --is-ancestor "$ref" "$mh_oid" 2>/dev/null; then method="gh-pr"; delflag="-D"; break; fi
+        done <<<"$GH_MERGED_HEADS"
       fi
       if [ -z "$method" ] && content_absorbed_into_dev "$ref"; then
         method="content-equivalent"; conf=medium; delflag="-D"
