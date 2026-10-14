@@ -9,6 +9,8 @@ that runs the script + a channel that delivers the report.**
 |---|---|---|
 | GitHub Actions PR bot | **Live on this repo** (`.github/workflows/gitdoctor-pr.yml`) | [github-actions/gitdoctor-pr.yml](github-actions/gitdoctor-pr.yml) (template) + [github-actions/comment.sh](github-actions/comment.sh) |
 | GitHub Actions scheduled scan | Template | [github-actions/gitdoctor-scheduled.yml](github-actions/gitdoctor-scheduled.yml) |
+| GitHub Actions back-merge PR | Template + action input `back-merge-pr`, script tested (fixture suite) | [github-actions/gitdoctor-back-merge.yml](github-actions/gitdoctor-back-merge.yml) + [github-actions/back-merge-pr.sh](github-actions/back-merge-pr.sh) |
+| GitBot bot | **Draft**, listing rules tested (fixture suite); not yet run in GitBot or published | [gitbot/gitdoctor/](gitbot/gitdoctor/) |
 | Local `pre-push` hook | Tested (fixture suite) | [hooks/pre-push](hooks/pre-push) |
 | Server-side `pre-receive` hook | Tested (fixture suite) | [hooks/pre-receive](hooks/pre-receive) |
 | pre-commit framework | Hook definition, tested (fixture suite) | [.pre-commit-hooks.yaml](../.pre-commit-hooks.yaml) → [hooks/pre-push](hooks/pre-push) |
@@ -26,7 +28,7 @@ one `uses:` line — copy `github-actions/gitdoctor-pr.yml` into your repo as
 `.github/workflows/gitdoctor-pr.yml`:
 
 ```yaml
-- uses: cagatayuncu/gitdoctor@v0.4.1
+- uses: cagatayuncu/gitdoctor@v0.5.0
   # inputs (optional): checks, skip, min-severity, comment, fail-on, github-token
 ```
 
@@ -50,6 +52,51 @@ Notes:
   `check-id:key` fingerprint, so one finding stays one alert across runs until
   it clears. Standalone: `gitflow-doctor.sh --format sarif`.
 
+## Back-merge PR
+
+`missing-back-merge` is the one critical a bot can fix without deciding
+anything: the repair is a single merge whose outcome git can predict. Copy
+`github-actions/gitdoctor-back-merge.yml` into `.github/workflows/` and, on
+weekday mornings, the action opens ONE pull request `backmerge/main → develop`
+when main has commits develop lacks. Only when every gate passes:
+
+- ancestry is certain (`confidence: high` — a shallow checkout never qualifies);
+- `git merge-tree` predicts no conflicts (a conflicting back-merge belongs in
+  `/gitdoctor finish` or the recipe, where every resolution is proven);
+- the doctor reports no open release carrying main's commits (`carriedBy`:
+  a release that took the hotfix back-merge sends the fix to develop when it
+  finishes, finish-hotfix.md; a release merely cut from main does not count);
+- no back-merge PR into develop is open yet (one from `/gitdoctor finish` in
+  PR mode counts; a fork's PR never does). An open `backmerge/main` PR is
+  fast-forwarded to the new main instead.
+- git on the runner is 2.38 or newer, and the check could run at all (a
+  single-branch checkout without develop reports `skipped-unavailable` and an
+  Actions warning, never a quiet "not needed").
+
+The head is a carrier branch at main's tip, never `main` itself, so resolving
+a conflict on GitHub can't write to main. The carrier is only ever
+fast-forwarded: after "Update branch" on GitHub it is left alone, and a
+leftover carrier with foreign commits stops the run with "delete it" rather
+than being overwritten. Merging stays with a person: the PR asks for
+**Create a merge commit**, since a squash leaves the ancestry gap
+(`back-merge-content-only`). Closing the PR unmerged does not silence it —
+the gap is still there, so the next run opens it again; disable the workflow
+to pause it. The action reports the outcome as
+`steps.<id>.outputs.back-merge` and `back-merge-pr` (the URL). The same
+script runs anywhere with git + gh: `back-merge-pr.sh --dry-run` reports what
+it would do and changes nothing. Every install ships it next to the doctor:
+`~/.claude/skills/gitdoctor/scripts/back-merge-pr.sh` (install.sh /
+install.ps1), the plugin's `integrations/github-actions/`, and
+`gitdoctor-back-merge-pr` on PATH with Homebrew. It finds the doctor beside
+itself or on PATH (`GITDOCTOR_PATH` overrides).
+
+Setup: the job needs `contents: write` + `pull-requests: write`, and the repo
+must allow it (Settings → Actions → General → Workflow permissions → *Allow
+GitHub Actions to create and approve pull requests*); without it the script
+says so and leaves the carrier pushed for the next run. PRs opened with the
+default `GITHUB_TOKEN` start no other workflows, so if develop requires status
+checks, give `actions/checkout` and the action a PAT or GitHub App token.
+
 ## Hooks
 
 - **pre-push (client-side, any host incl. GitHub.com):** copy
@@ -63,7 +110,7 @@ Notes:
   ```yaml
   repos:
     - repo: https://github.com/cagatayuncu/gitdoctor
-      rev: v0.4.1
+      rev: v0.5.0
       hooks:
         - id: gitdoctor-preflight
   ```
@@ -90,6 +137,21 @@ Gitea Actions runs GitHub-Actions-format workflows: the PR template works
 as-is on runners whose images ship `gh` and `jq`; otherwise replace the
 comment step with a `curl` against the Gitea API (same shape as the GitLab
 draft). The pre-receive hook works natively on Gitea servers.
+
+## GitBot bot
+
+[GitBot](https://github.com/gitbot-hq/GitBot) runs Claude Code as a named bot
+with one standing job. `gitbot/gitdoctor/` is that job for gitdoctor, in the
+folder format of the [GitBot Library](https://github.com/gitbot-hq/Library)
+(`bots/<slug>/`): diagnose, open the back-merge PR through the same
+`back-merge-pr` tool and gates as the Action, run four mechanical fixes
+(`tag-unpushed`, `branch-stale-merged`, `gh-release-missing-for-tag`,
+`gh-open-pr-wrong-base`) one approval at a time with the doctor's own
+commands, and explain the rest. It never merges, never pushes main or develop,
+never force-pushes. `ask-permissions` mode; `setup.md` checks git ≥ 2.38, `gh`
+signed in and gitdoctor ≥ 0.5.0. The fixture suite replays the Library's
+listing rules (field limits, enums, exactly three features, ≤ 600 words, no
+machine paths) so a publish PR does not bounce on them.
 
 ## AI-agent schedule (zero infrastructure)
 

@@ -1,0 +1,19 @@
+{
+  "$schema": "../../schema/bot.schema.json",
+  "slug": "gitdoctor",
+  "name": "gitdoctor",
+  "description": "Checks your Git Flow and opens the back-merge PR when git proves it safe",
+  "category": "Repository care",
+  "about": "Runs gitdoctor's read-only checks over main, develop, release and hotfix branches and tags. When main has commits develop never got and git predicts no conflicts, it opens the back-merge pull request for you to merge. A few other mechanical fixes run one by one with your approval; everything else comes with its fix recipe.",
+  "features": [
+    "Find drift across main, develop, releases and tags",
+    "Open the back-merge PR only when no conflict is predicted",
+    "Apply other fixes one at a time, only with your approval"
+  ],
+  "examplePrompt": "Check this repo's git flow and open the back-merge PR if main has commits that develop is missing.",
+  "author": { "github": "cagatayuncu", "name": "Çağatay UNCU" },
+  "mascot": { "body": "cat", "color": "brand-sky", "activity": "reading" },
+  "emoji": "🔀",
+  "agent": "claude-code",
+  "permissionMode": "ask-permissions"
+}

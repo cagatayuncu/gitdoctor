@@ -25,7 +25,7 @@ set -f # no pathname expansion: ref names may contain *?[ and several list
 LC_ALL=C
 export LC_ALL
 
-DOCTOR_VERSION="0.4.1"
+DOCTOR_VERSION="0.5.0"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 RELEASE_NAME_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 RELEASE_NAME_PRE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
@@ -88,7 +88,9 @@ usage: gitflow-doctor.sh [options]
                              (probes always emit JSON; baseline always exits 0)
   --explain CHECK-ID         print the fix recipe for one check and exit
   --list-checks              print every check id and exit
-  --offline                  no fetch, no gh, no network ls-remote
+  --version                  print the doctor's version and exit (with a value
+                             after --probe: the version being finished)
+  --offline                 no fetch, no gh, no network ls-remote
   --no-fetch                 skip the fetch but keep gh/ls-remote
   --now EPOCH                clock override for time-based checks
   --checks id,id             run only these checks
@@ -175,7 +177,9 @@ while [ $# -gt 0 ]; do
     --tag) WS_TAG=${2:?}; shift 2 ;;
     --probe) PROBE=${2:?}; shift 2 ;;
     --branch) PROBE_BRANCH=${2:?}; shift 2 ;;
-    --version) PROBE_VERSION=${2:?}; shift 2 ;;
+    --version) # alone: print the version; with a value: the probe's version
+      case "${2:-}" in "" | -*) echo "gitflow-doctor $DOCTOR_VERSION"; exit 0 ;; esac
+      PROBE_VERSION=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die_usage "unknown option: $1" ;;
   esac
@@ -522,7 +526,11 @@ print_output() {
   local jl jn
   json_str_v jl "${LATEST_TAG:-}"; json_str_v jn "${NEXT_HOTFIX:-}"
   repo="{\"root\":\"$jr\",\"github\":\"$js\",\"main\":\"$jm\",\"develop\":\"$jd\",\"mergeMode\":{\"configured\":\"$MERGE_MODE\",\"resolved\":{\"main\":\"${RESOLVED_MAIN_MODE:-unknown}\",\"develop\":\"${RESOLVED_DEV_MODE:-unknown}\"}}"
-  repo="$repo,\"versions\":{\"scheme\":\"${VERSION_SCHEME:-semver}\",\"latestTag\":\"$jl\",\"nextHotfix\":\"$jn\"}}"
+  repo="$repo,\"versions\":{\"scheme\":\"${VERSION_SCHEME:-semver}\",\"latestTag\":\"$jl\",\"nextHotfix\":\"$jn\"}"
+  local jpf jpr jph jpb
+  json_str_v jpf "$FEATURE_PREFIX"; json_str_v jpr "$RELEASE_PREFIX"
+  json_str_v jph "$HOTFIX_PREFIX"; json_str_v jpb "$BACKMERGE_PREFIX"
+  repo="$repo,\"prefixes\":{\"feature\":\"$jpf\",\"release\":\"$jpr\",\"hotfix\":\"$jph\",\"backmerge\":\"$jpb\"}}"
   case "$FORMAT" in
     text) render_text; return ;;
     markdown) render_markdown; return ;;
@@ -747,7 +755,7 @@ SHALLOW=0; [ "$_shallow" = true ] && SHALLOW=1
 # zero-spawn scan of the scalar keys the doctor understands; the agent passes
 # everything as flags, which always win. Several keys may share one line.
 CONFIG_FILE="$REPO_ROOT/.gitflow.json"
-CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula|scheme|hotfixPattern)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
+CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula|scheme|hotfixPattern|feature|release|hotfix|backmerge)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
 if [ -f "$CONFIG_FILE" ]; then
   CFG_CL_BLOCK=0; CFG_CL_FILE=""; CFG_CL_ENABLED=true
   while IFS= read -r line || [ -n "$line" ]; do
@@ -771,6 +779,14 @@ if [ -f "$CONFIG_FILE" ]; then
         formula) [ -z "$HOMEBREW_FORMULA" ] && HOMEBREW_FORMULA=$val ;;
         scheme) [ -z "$VERSION_SCHEME" ] && VERSION_SCHEME=$val ;;
         hotfixPattern) [ -z "$HOTFIX_PATTERN" ] && HOTFIX_PATTERN=$val ;;
+        feature | release | hotfix | backmerge) # prefixes.*; "{" opens the release/backmerge blocks
+          case "$key:$val" in
+            *: | *:"{") ;;
+            feature:*) [ "$FEATURE_PREFIX" = feature/ ] && FEATURE_PREFIX=$val ;;
+            release:*) [ "$RELEASE_PREFIX" = release/ ] && RELEASE_PREFIX=$val ;;
+            hotfix:*) [ "$HOTFIX_PREFIX" = hotfix/ ] && HOTFIX_PREFIX=$val ;;
+            backmerge:*) [ "$BACKMERGE_PREFIX" = backmerge/ ] && BACKMERGE_PREFIX=$val ;;
+          esac ;;
       esac
     done
   done <"$CONFIG_FILE"
@@ -1165,6 +1181,32 @@ open_releases_v() { # varname newline-list -> entries that have NOT shipped yet
     __or_out="$__or_out${__or_out:+$NL}$__or_br"
   done <<<"$2"
   printf -v "$__or_v" '%s' "$__or_out"
+}
+
+branched_from_main() { # ref -> 0 when main-only commits sit on ref's own first-parent
+  # line (cut from main), not only behind a merge's second parent (a hotfix
+  # tag back-merged into an open release). Unknown counts keep the alarm.
+  local __bf_all="" __bf_own=""
+  capture __bf_all git rev-list --first-parent --count "$1" "^$R_DEV"
+  capture __bf_own git rev-list --first-parent --count "$1" "^$R_DEV" "^$R_MAIN"
+  if [ -z "$__bf_all" ] || [ -z "$__bf_own" ]; then return 0; fi
+  [ "$__bf_all" != "$__bf_own" ]
+}
+
+release_carrying_main_v() { # varname newline-list-of-open-releases -> first one that
+  # holds main's tip by a back-merge (finish-hotfix.md § Back-merge target
+  # selection): main's commits reach develop when that release finishes
+  local __rc_v=$1 __rc_br __rc_ref=""
+  clear_v "$__rc_v"
+  while IFS= read -r __rc_br; do
+    [ -z "$__rc_br" ] && continue
+    branch_ref_v __rc_ref "$__rc_br"; [ -z "$__rc_ref" ] && continue
+    git merge-base --is-ancestor "$R_MAIN" "$__rc_ref" 2>/dev/null || continue
+    branched_from_main "$__rc_ref" && continue
+    printf -v "$__rc_v" '%s' "$__rc_br"
+    return 0
+  done <<<"$2"
+  return 0
 }
 
 conflicts_predicted() { # ref_a ref_b
@@ -2016,12 +2058,20 @@ else
   GH_MERGED_HEADS=""
   GH_MAIN_PR_LINES=""
   if [ "$GH_MODE" = 1 ] && any_enabled untagged-merge-on-main direct-commit-on-main branch-stale-merged; then
-    capture_all GH_MERGED_HEADS gh pr list --state merged --limit 100 --json headRefName --jq '.[].headRefName'
+    # "<head branch> <head sha at merge>": a name alone is not proof, names get reused
+    capture_all GH_MERGED_HEADS gh pr list --state merged --limit 100 --json headRefName,headRefOid --jq '.[] | "\(.headRefName) \(.headRefOid)"'
     capture_all GH_MAIN_PR_LINES gh pr list --base "$MAIN" --state merged --limit 50 --json headRefName,mergeCommit --jq '.[] | "\(.headRefName) \(.mergeCommit.oid)"'
   fi
 
   SINCE_ARG=""
   [ -n "$OLDEST_TAG" ] && SINCE_ARG="$OLDEST_TAG.."
+
+  FEATURES=""; RELEASES=""; HOTFIXES=""
+  list_branches_v FEATURES "${FEATURE_PREFIX}*"
+  list_branches_v RELEASES "${RELEASE_PREFIX}*"
+  list_branches_v HOTFIXES "${HOTFIX_PREFIX}*"
+  OPEN_RELEASES=""; open_releases_v OPEN_RELEASES "$RELEASES" # shipped leftovers are not open
+  BM_CARRIER="" # open release holding main's tip by a hotfix back-merge
 
   # missing-back-merge
   if any_enabled missing-back-merge back-merge-content-only; then
@@ -2047,10 +2097,22 @@ else
       else
         cp=false
         conflicts_predicted "$R_DEV" "$R_MAIN" && cp=true
-        json_arr_v FIX "git switch $DEVELOP" "git merge --no-ff origin/$MAIN" "git push origin $DEVELOP"
-        fail_check missing-back-merge critical "$MAIN has $BM_COUNT commit(s) not in $DEVELOP" \
-          "\"ahead\":$BM_COUNT,\"commits\":$BM_ARR,\"patchEquivalent\":false,\"conflictsPredicted\":$cp" \
-          "$FIX" missing-back-merge "$ANCESTRY_CONF"
+        release_carrying_main_v BM_CARRIER "$OPEN_RELEASES"
+        if [ -n "$BM_CARRIER" ]; then
+          # keyed by the release: a baseline entry must not also mute the
+          # critical that returns if this release is abandoned
+          json_str_v J "$BM_CARRIER"
+          json_arr_v FIX "nothing now — finishing $BM_CARRIER back-merges them into $DEVELOP" \
+            "only if $BM_CARRIER is abandoned: git switch $DEVELOP && git merge --no-ff origin/$MAIN && git push origin $DEVELOP"
+          fail_check missing-back-merge info "$MAIN has $BM_COUNT commit(s) not in $DEVELOP — carried by open $BM_CARRIER, they reach $DEVELOP when it finishes" \
+            "\"ahead\":$BM_COUNT,\"commits\":$BM_ARR,\"patchEquivalent\":false,\"conflictsPredicted\":$cp,\"carriedBy\":\"$J\"" \
+            "$FIX" missing-back-merge "$ANCESTRY_CONF" "$BM_CARRIER"
+        else
+          json_arr_v FIX "git switch $DEVELOP" "git merge --no-ff origin/$MAIN" "git push origin $DEVELOP"
+          fail_check missing-back-merge critical "$MAIN has $BM_COUNT commit(s) not in $DEVELOP" \
+            "\"ahead\":$BM_COUNT,\"commits\":$BM_ARR,\"patchEquivalent\":false,\"conflictsPredicted\":$cp" \
+            "$FIX" missing-back-merge "$ANCESTRY_CONF"
+        fi
       fi
     else
       ok_check missing-back-merge
@@ -2131,11 +2193,6 @@ else
   fi
 
   # wrong-base: feature + release cut from develop
-  FEATURES=""; RELEASES=""; HOTFIXES=""
-  list_branches_v FEATURES "${FEATURE_PREFIX}*"
-  list_branches_v RELEASES "${RELEASE_PREFIX}*"
-  list_branches_v HOTFIXES "${HOTFIX_PREFIX}*"
-  OPEN_RELEASES=""; open_releases_v OPEN_RELEASES "$RELEASES" # shipped leftovers are not open
   BM_OPEN=0; [ "${BM_COUNT:-0}" -gt 0 ] 2>/dev/null && BM_OPEN=1
 
   if any_enabled wrong-base-feature; then
@@ -2149,6 +2206,12 @@ else
       cnt=""
       capture cnt git rev-list --count "$R_DEV..$mb"
       if [ "${cnt:-0}" -gt 0 ]; then
+        # a release that merged a hotfix tag (the back-merge target) is not mis-based
+        case "$br" in
+          "$RELEASE_PREFIX"*)
+            [ "$br" = "$BM_CARRIER" ] && continue # already proven above
+            branched_from_main "$ref" || continue ;;
+        esac
         wb_found=1
         rel=""
         [ "$BM_OPEN" = 1 ] && rel=",\"relatedFinding\":\"missing-back-merge\""
@@ -2414,7 +2477,12 @@ else
       if git merge-base --is-ancestor "$ref" "$R_DEV" 2>/dev/null; then
         method=ancestry
       elif [ "$GH_MODE" = 1 ] && [ -n "$GH_MERGED_HEADS" ]; then
-        case "$NL$GH_MERGED_HEADS$NL" in *"$NL$br$NL"*) method="gh-pr"; delflag="-D" ;; esac
+        # a merged PR on this name counts only if it merged this tip (or a
+        # descendant of it); a reused name has moved past its merged head
+        while IFS=' ' read -r mh_name mh_oid; do
+          if [ "$mh_name" != "$br" ] || [ -z "$mh_oid" ]; then continue; fi
+          if git merge-base --is-ancestor "$ref" "$mh_oid" 2>/dev/null; then method="gh-pr"; delflag="-D"; break; fi
+        done <<<"$GH_MERGED_HEADS"
       fi
       if [ -z "$method" ] && content_absorbed_into_dev "$ref"; then
         method="content-equivalent"; conf=medium; delflag="-D"

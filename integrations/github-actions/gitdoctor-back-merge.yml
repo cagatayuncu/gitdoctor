@@ -1,0 +1,50 @@
+name: gitdoctor-back-merge
+
+# Copy into YOUR repo as .github/workflows/gitdoctor-back-merge.yml.
+# When main has commits develop never got (a hotfix merged on GitHub, a
+# release whose back-merge was skipped) and git predicts no conflicts, this
+# opens ONE pull request backmerge/main -> develop. Re-runs move that PR along
+# with main instead of opening another. Predicted conflicts, shallow history
+# and an open release that already carries the commits are reported, never
+# opened. Merging stays with you: use "Create a merge commit", not squash.
+#
+# One-time repo setting: Settings > Actions > General > Workflow permissions >
+# "Allow GitHub Actions to create and approve pull requests".
+# PRs opened with the default GITHUB_TOKEN start no other workflows: if
+# develop requires status checks, pass a PAT or GitHub App token to both
+# actions/checkout (token:) and this action (github-token:).
+on:
+  schedule:
+    - cron: "37 6 * * 1-5" # weekday mornings, 06:37 UTC
+  workflow_dispatch: {}
+  # Immediate alternative. Skip it if you finish releases with /gitdoctor
+  # finish in PR mode: that flow opens its own back-merge PR right after the
+  # merge to main, and this one would race it.
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: write # push the backmerge/main carrier branch
+  pull-requests: write # open the PR
+
+concurrency:
+  group: gitdoctor-back-merge
+  cancel-in-progress: false
+
+jobs:
+  back-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all branches and tags
+        run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
+
+      - uses: cagatayuncu/gitdoctor@v0.5.0
+        with:
+          checks: missing-back-merge,back-merge-content-only
+          comment: "false"
+          fail-on: never
+          back-merge-pr: "true"

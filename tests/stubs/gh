@@ -39,6 +39,17 @@ case "$args" in
     say release-view.txt ;;
   release\ list\ *)
     say release-list.txt ;;
+  pr\ create\ *)
+    if [ "${GH_STUB_FAIL:-}" = "pr-create" ]; then
+      echo "pull request create failed: GraphQL: GitHub Actions is not permitted to create or approve pull requests (createPullRequest)" >&2
+      exit 1
+    fi
+    printf '%s\n' "$args" >>"$GH_STUB_DIR/pr-create.log"
+    while [ $# -gt 0 ]; do
+      [ "$1" = "--body-file" ] && [ $# -gt 1 ] && cp "$2" "$GH_STUB_DIR/pr-body.txt"
+      shift
+    done
+    say pr-create.txt ;;
   *)
     echo "gh-stub: unmatched invocation: gh $args" >&2
     exit 99 ;;

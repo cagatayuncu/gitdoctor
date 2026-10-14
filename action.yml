@@ -10,12 +10,14 @@ branding:
 # Requires a checkout with FULL history first (ancestry checks degrade on
 # shallow clones):
 #
-#   - uses: actions/checkout@v4
+#   - uses: actions/checkout@v5
 #     with: { fetch-depth: 0 }
 #   - run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
-#   - uses: cagatayuncu/gitdoctor@v0.4.1
+#   - uses: cagatayuncu/gitdoctor@v0.5.0
 #
 # For the PR comment, the job needs: permissions: { pull-requests: write }.
+# back-merge-pr: true also needs contents: write (it pushes the carrier branch)
+# — template: integrations/github-actions/gitdoctor-back-merge.yml.
 
 inputs:
   checks:
@@ -46,6 +48,10 @@ inputs:
     description: "Also write a SARIF report here and upload it to code scanning (job needs permissions: security-events: write)"
     required: false
     default: ""
+  back-merge-pr:
+    description: "Open (or refresh) ONE backmerge/<main> -> develop PR when main has commits develop lacks and git predicts no conflicts; never on pull_request events (job needs contents: write + pull-requests: write)"
+    required: false
+    default: "false"
 
 outputs:
   exit-code:
@@ -54,6 +60,12 @@ outputs:
   report:
     description: "Path to the JSON report"
     value: ${{ steps.run.outputs.report }}
+  back-merge:
+    description: "back-merge-pr result: not-needed | skipped-unavailable | skipped-low-confidence | skipped-conflicts | skipped-release-open | pr-exists | pr-updated | pr-opened"
+    value: ${{ steps.backmerge.outputs.status }}
+  back-merge-pr:
+    description: "URL of the open back-merge PR, when there is one"
+    value: ${{ steps.backmerge.outputs.pr }}
 
 runs:
   using: "composite"
@@ -87,6 +99,14 @@ runs:
       run: |
         bash "${{ github.action_path }}/integrations/github-actions/comment.sh" \
           "${{ steps.run.outputs.report }}" "${{ github.event.pull_request.number }}"
+
+    - name: Open the back-merge PR
+      id: backmerge
+      if: ${{ inputs.back-merge-pr == 'true' && !startsWith(github.event_name, 'pull_request') }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: bash "${{ github.action_path }}/integrations/github-actions/back-merge-pr.sh"
 
     - name: Upload SARIF to code scanning
       if: ${{ inputs.sarif-file != '' }}

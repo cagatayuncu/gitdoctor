@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.0 (2026-10-14)
+
+### Features
+- Back-merge PR bot: the action input `back-merge-pr` (outputs `back-merge`,
+  `back-merge-pr`) and the template
+  `integrations/github-actions/gitdoctor-back-merge.yml` run
+  `back-merge-pr.sh`, which opens ONE `backmerge/<main>` → develop pull
+  request when main has commits develop lacks and it is safe to hand to a
+  reviewer: certain ancestry, no predicted conflict, git ≥ 2.38, no open
+  release carrying main's commits, no back-merge PR already open (fork PRs
+  never count). The carrier is only ever fast-forwarded; `--dry-run` reports
+  `would-open` / `would-update`. Verified on GitHub end to end
+- The script ships with every install: the skill's `scripts/back-merge-pr.sh`
+  (install.sh / install.ps1), the Claude Code plugin, and
+  `gitdoctor-back-merge-pr` with Homebrew
+- GitBot bot `integrations/gitbot/gitdoctor/` in the GitBot Library format:
+  diagnose, open the back-merge PR, run `tag-unpushed`,
+  `branch-stale-merged`, `gh-release-missing-for-tag` and
+  `gh-open-pr-wrong-base` one approval at a time, explain the rest; rehearsed
+  in GitBot 0.0.11
+- `--version` alone prints the doctor's version (with a value it stays the
+  probe's version); `back-merge-pr.sh --version` prints the doctor it runs
+- The JSON header gains `repo.prefixes`; standalone runs (CI, hooks) read
+  `prefixes.*` from `.gitflow.json`
+
+### Fixes
+- A hotfix back-merged into an open release (the finish-hotfix.md target) is
+  no longer a critical `missing-back-merge`: it is `info` with `carriedBy`
+  and `key=<release>`, and turns critical again if the release is abandoned.
+  `wrong-base-feature` no longer flags that release
+- `branch-stale-merged` no longer trusts a merged PR's branch name alone: a
+  reused name was offered for `git branch -D` with unmerged work. The branch
+  tip must now be the merged PR's head (or behind it)
+- Workflows and templates use `actions/checkout@v5` (Node 20 deprecation)
+
+### Tests
+- 76 fixtures (back-merge PR gates and carrier states, install layouts,
+  GitBot listing rules, carried-by releases, reused branch names)
+
 ## 0.4.1 (2026-09-29)
 
 ### Features
