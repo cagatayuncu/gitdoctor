@@ -8,6 +8,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $src = $PSScriptRoot
+# the back-merge PR bot runs from the skill too (it finds the doctor beside it)
+$backmergePr = Join-Path $src "integrations\github-actions\back-merge-pr.sh"
 
 $skillDir = Join-Path $HOME ".claude\skills\gitdoctor"
 New-Item -ItemType Directory -Force -Path $skillDir | Out-Null
@@ -19,6 +21,7 @@ foreach ($sub in @("references", "scripts")) {
 Copy-Item -Force (Join-Path $src "SKILL.md") $skillDir
 Copy-Item -Recurse -Force (Join-Path $src "references") $skillDir
 Copy-Item -Recurse -Force (Join-Path $src "scripts") $skillDir
+Copy-Item -Force $backmergePr (Join-Path $skillDir "scripts")
 Write-Host "Claude Code skill installed: $skillDir"
 
 if ($CursorRepo -ne "") {
@@ -36,5 +39,6 @@ if ($CursorRepo -ne "") {
   Copy-Item -Force (Join-Path $src "SKILL.md") $payload
   Copy-Item -Recurse -Force (Join-Path $src "references") $payload
   Copy-Item -Recurse -Force (Join-Path $src "scripts") $payload
+  Copy-Item -Force $backmergePr (Join-Path $payload "scripts")
   Write-Host "Cursor command installed: $cmdDir\gitdoctor.md (+ gitdoctor-skill payload)"
 }

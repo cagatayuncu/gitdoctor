@@ -88,7 +88,9 @@ usage: gitflow-doctor.sh [options]
                              (probes always emit JSON; baseline always exits 0)
   --explain CHECK-ID         print the fix recipe for one check and exit
   --list-checks              print every check id and exit
-  --offline                  no fetch, no gh, no network ls-remote
+  --version                  print the doctor's version and exit (with a value
+                             after --probe: the version being finished)
+  --offline                 no fetch, no gh, no network ls-remote
   --no-fetch                 skip the fetch but keep gh/ls-remote
   --now EPOCH                clock override for time-based checks
   --checks id,id             run only these checks
@@ -175,7 +177,9 @@ while [ $# -gt 0 ]; do
     --tag) WS_TAG=${2:?}; shift 2 ;;
     --probe) PROBE=${2:?}; shift 2 ;;
     --branch) PROBE_BRANCH=${2:?}; shift 2 ;;
-    --version) PROBE_VERSION=${2:?}; shift 2 ;;
+    --version) # alone: print the version; with a value: the probe's version
+      case "${2:-}" in "" | -*) echo "gitflow-doctor $DOCTOR_VERSION"; exit 0 ;; esac
+      PROBE_VERSION=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die_usage "unknown option: $1" ;;
   esac
@@ -522,7 +526,11 @@ print_output() {
   local jl jn
   json_str_v jl "${LATEST_TAG:-}"; json_str_v jn "${NEXT_HOTFIX:-}"
   repo="{\"root\":\"$jr\",\"github\":\"$js\",\"main\":\"$jm\",\"develop\":\"$jd\",\"mergeMode\":{\"configured\":\"$MERGE_MODE\",\"resolved\":{\"main\":\"${RESOLVED_MAIN_MODE:-unknown}\",\"develop\":\"${RESOLVED_DEV_MODE:-unknown}\"}}"
-  repo="$repo,\"versions\":{\"scheme\":\"${VERSION_SCHEME:-semver}\",\"latestTag\":\"$jl\",\"nextHotfix\":\"$jn\"}}"
+  repo="$repo,\"versions\":{\"scheme\":\"${VERSION_SCHEME:-semver}\",\"latestTag\":\"$jl\",\"nextHotfix\":\"$jn\"}"
+  local jpf jpr jph jpb
+  json_str_v jpf "$FEATURE_PREFIX"; json_str_v jpr "$RELEASE_PREFIX"
+  json_str_v jph "$HOTFIX_PREFIX"; json_str_v jpb "$BACKMERGE_PREFIX"
+  repo="$repo,\"prefixes\":{\"feature\":\"$jpf\",\"release\":\"$jpr\",\"hotfix\":\"$jph\",\"backmerge\":\"$jpb\"}}"
   case "$FORMAT" in
     text) render_text; return ;;
     markdown) render_markdown; return ;;
@@ -747,7 +755,7 @@ SHALLOW=0; [ "$_shallow" = true ] && SHALLOW=1
 # zero-spawn scan of the scalar keys the doctor understands; the agent passes
 # everything as flags, which always win. Several keys may share one line.
 CONFIG_FILE="$REPO_ROOT/.gitflow.json"
-CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula|scheme|hotfixPattern)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
+CFG_KEY_RE='"(main|develop|tagPrefix|mergeMode|staleDays|maxConcurrent|changelog|file|enabled|githubRelease|signedTags|tap|formula|scheme|hotfixPattern|feature|release|hotfix|backmerge)"[[:space:]]*:[[:space:]]*("([^"]*)"|[0-9]+|true|false|\{)'
 if [ -f "$CONFIG_FILE" ]; then
   CFG_CL_BLOCK=0; CFG_CL_FILE=""; CFG_CL_ENABLED=true
   while IFS= read -r line || [ -n "$line" ]; do
@@ -771,6 +779,14 @@ if [ -f "$CONFIG_FILE" ]; then
         formula) [ -z "$HOMEBREW_FORMULA" ] && HOMEBREW_FORMULA=$val ;;
         scheme) [ -z "$VERSION_SCHEME" ] && VERSION_SCHEME=$val ;;
         hotfixPattern) [ -z "$HOTFIX_PATTERN" ] && HOTFIX_PATTERN=$val ;;
+        feature | release | hotfix | backmerge) # prefixes.*; "{" opens the release/backmerge blocks
+          case "$key:$val" in
+            *: | *:"{") ;;
+            feature:*) [ "$FEATURE_PREFIX" = feature/ ] && FEATURE_PREFIX=$val ;;
+            release:*) [ "$RELEASE_PREFIX" = release/ ] && RELEASE_PREFIX=$val ;;
+            hotfix:*) [ "$HOTFIX_PREFIX" = hotfix/ ] && HOTFIX_PREFIX=$val ;;
+            backmerge:*) [ "$BACKMERGE_PREFIX" = backmerge/ ] && BACKMERGE_PREFIX=$val ;;
+          esac ;;
       esac
     done
   done <"$CONFIG_FILE"
@@ -2042,7 +2058,8 @@ else
   GH_MERGED_HEADS=""
   GH_MAIN_PR_LINES=""
   if [ "$GH_MODE" = 1 ] && any_enabled untagged-merge-on-main direct-commit-on-main branch-stale-merged; then
-    capture_all GH_MERGED_HEADS gh pr list --state merged --limit 100 --json headRefName --jq '.[].headRefName'
+    # "<head branch> <head sha at merge>": a name alone is not proof, names get reused
+    capture_all GH_MERGED_HEADS gh pr list --state merged --limit 100 --json headRefName,headRefOid --jq '.[] | "\(.headRefName) \(.headRefOid)"'
     capture_all GH_MAIN_PR_LINES gh pr list --base "$MAIN" --state merged --limit 50 --json headRefName,mergeCommit --jq '.[] | "\(.headRefName) \(.mergeCommit.oid)"'
   fi
 
@@ -2460,7 +2477,12 @@ else
       if git merge-base --is-ancestor "$ref" "$R_DEV" 2>/dev/null; then
         method=ancestry
       elif [ "$GH_MODE" = 1 ] && [ -n "$GH_MERGED_HEADS" ]; then
-        case "$NL$GH_MERGED_HEADS$NL" in *"$NL$br$NL"*) method="gh-pr"; delflag="-D" ;; esac
+        # a merged PR on this name counts only if it merged this tip (or a
+        # descendant of it); a reused name has moved past its merged head
+        while IFS=' ' read -r mh_name mh_oid; do
+          if [ "$mh_name" != "$br" ] || [ -z "$mh_oid" ]; then continue; fi
+          if git merge-base --is-ancestor "$ref" "$mh_oid" 2>/dev/null; then method="gh-pr"; delflag="-D"; break; fi
+        done <<<"$GH_MERGED_HEADS"
       fi
       if [ -z "$method" ] && content_absorbed_into_dev "$ref"; then
         method="content-equivalent"; conf=medium; delflag="-D"

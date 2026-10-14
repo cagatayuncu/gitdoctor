@@ -113,6 +113,12 @@ git push origin develop
 If `conflictsPredicted:true`, warn the user first and resolve per
 references/finish-release.md § Back-merge conflicts.
 
+Protected develop, or the user wants it reviewed: `back-merge-pr.sh` (next to
+the doctor in a skill install; `gitdoctor-back-merge-pr` with Homebrew) opens
+ONE PR `backmerge/<main>` → develop instead, and only when ancestry is certain,
+no conflict is predicted and no open release already carries main's commits.
+Show `back-merge-pr.sh --dry-run` first; merge the PR with a merge commit.
+
 Variant `back-merge-content-only` (info): the content already reached develop
 via a squash — ancestry repair (the same merge, which will be a no-op
 content-wise) is optional but makes future doctor runs exact.
