@@ -26,11 +26,18 @@ reporting it as `orphaned-release-branch` for cleanup.
   ask the user which release takes the back-merge (the doctor already flagged
   multiple-release-branches).
 
-If a release is later **aborted** after absorbing a hotfix back-merge, the
-hotfix commits vanish from develop's future — the doctor's
-`missing-back-merge` catches exactly this on the next run and prescribes the
-main→develop repair. Rule: cleanup after any release abort is doctor-driven —
-run the doctor immediately after aborting a release.
+While that release is open, main's commits are in it but not yet in develop.
+The doctor knows this state: `missing-back-merge` is `info` with
+`carriedBy:"release/X.Y.Z"` (keyed by the release), not critical, and
+`wrong-base-feature` does not count the merged tag as a wrong base for the
+release. A release cut from main is no carrier and keeps both alarms.
+
+If a release is later **abandoned** (branch deleted — `finish --abort` keeps
+the branch, so that release is still pending) after absorbing a hotfix
+back-merge, the hotfix commits vanish from develop's future — the doctor's
+`missing-back-merge` turns critical again on the next run and prescribes the
+main→develop repair. Rule: cleanup after any release abandonment is
+doctor-driven — run the doctor immediately after deleting a release branch.
 
 ## Version guard (also applied at start)
 
