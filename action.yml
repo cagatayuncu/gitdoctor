@@ -10,10 +10,10 @@ branding:
 # Requires a checkout with FULL history first (ancestry checks degrade on
 # shallow clones):
 #
-#   - uses: actions/checkout@v4
+#   - uses: actions/checkout@v5
 #     with: { fetch-depth: 0 }
 #   - run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
-#   - uses: cagatayuncu/gitdoctor@v0.4.1
+#   - uses: cagatayuncu/gitdoctor@v0.5.0
 #
 # For the PR comment, the job needs: permissions: { pull-requests: write }.
 # back-merge-pr: true also needs contents: write (it pushes the carrier branch)
