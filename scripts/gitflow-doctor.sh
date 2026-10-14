@@ -2434,7 +2434,7 @@ else
         # a merged PR on this name counts only if it merged this tip (or a
         # descendant of it); a reused name has moved past its merged head
         while IFS=' ' read -r mh_name mh_oid; do
-          [ "$mh_name" = "$br" ] && [ -n "$mh_oid" ] || continue
+          if [ "$mh_name" != "$br" ] || [ -z "$mh_oid" ]; then continue; fi
           if git merge-base --is-ancestor "$ref" "$mh_oid" 2>/dev/null; then method="gh-pr"; delflag="-D"; break; fi
         done <<<"$GH_MERGED_HEADS"
       fi
