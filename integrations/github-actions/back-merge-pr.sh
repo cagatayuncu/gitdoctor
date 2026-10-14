@@ -22,11 +22,13 @@
 # Exit 2: usage.
 set -u
 
-USAGE="usage: back-merge-pr.sh [--dry-run]"
+USAGE="usage: back-merge-pr.sh [--dry-run | --version]"
 DRY_RUN=0
+VERSION_ONLY=0
 case "${1:-}" in
   "") ;;
   --dry-run) DRY_RUN=1 ;;
+  --version) VERSION_ONLY=1 ;;
   -h | --help) echo "$USAGE"; exit 0 ;;
   *) echo "$USAGE" >&2; exit 2 ;;
 esac
@@ -53,6 +55,8 @@ if [ -z "$DOCTOR" ]; then
   DOCTOR=$(command -v gitdoctor 2>/dev/null || command -v gitflow-doctor.sh 2>/dev/null) \
     || die "gitflow-doctor.sh not found (install gitdoctor, or set GITDOCTOR_PATH)"
 fi
+# the version of the doctor it will run: one check proves both are installed
+if [ "$VERSION_ONLY" = 1 ]; then exec bash "$DOCTOR" --version; fi
 
 finish() { # status [pr-url] [message]
   echo "gitdoctor back-merge: $1${3:+ - $3}${2:+ $2}"

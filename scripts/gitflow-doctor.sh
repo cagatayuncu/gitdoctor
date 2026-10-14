@@ -88,7 +88,9 @@ usage: gitflow-doctor.sh [options]
                              (probes always emit JSON; baseline always exits 0)
   --explain CHECK-ID         print the fix recipe for one check and exit
   --list-checks              print every check id and exit
-  --offline                  no fetch, no gh, no network ls-remote
+  --version                  print the doctor's version and exit (with a value
+                             after --probe: the version being finished)
+  --offline                 no fetch, no gh, no network ls-remote
   --no-fetch                 skip the fetch but keep gh/ls-remote
   --now EPOCH                clock override for time-based checks
   --checks id,id             run only these checks
@@ -175,7 +177,9 @@ while [ $# -gt 0 ]; do
     --tag) WS_TAG=${2:?}; shift 2 ;;
     --probe) PROBE=${2:?}; shift 2 ;;
     --branch) PROBE_BRANCH=${2:?}; shift 2 ;;
-    --version) PROBE_VERSION=${2:?}; shift 2 ;;
+    --version) # alone: print the version; with a value: the probe's version
+      case "${2:-}" in "" | -*) echo "gitflow-doctor $DOCTOR_VERSION"; exit 0 ;; esac
+      PROBE_VERSION=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die_usage "unknown option: $1" ;;
   esac

@@ -37,3 +37,10 @@ set -e
 assert_exit 4 "$c1"; grep -q "unknown check id 'no-such-check'" "$TESTTMP/err.txt" || fail "explain error text"
 assert_exit 4 "$c2"; grep -q "\-\-checks: unknown check id 'typo-here'" "$TESTTMP/err2.txt" || fail "--checks validation text: $(cat "$TESTTMP/err2.txt")"
 assert_exit 4 "$c3"; grep -q "\-\-skip: unknown check id 'typo-here'" "$TESTTMP/err3.txt" || fail "--skip validation text"
+
+# --version alone prints the version (setup checks, Homebrew); --version X.Y.Z
+# stays the probe's version argument
+out=$(bash "$DOCTOR" --version) || fail "--version must exit 0"
+[[ $out =~ ^gitflow-doctor\ [0-9]+\.[0-9]+\.[0-9] ]] || fail "--version must print 'gitflow-doctor X.Y.Z', got: $out"
+bm=$(bash "$SKILL_ROOT/integrations/github-actions/back-merge-pr.sh" --version) || fail "back-merge-pr --version must exit 0"
+[ "$bm" = "$out" ] || fail "back-merge-pr --version must report the doctor it runs ($out), got: $bm"
