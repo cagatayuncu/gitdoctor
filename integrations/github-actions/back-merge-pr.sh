@@ -114,9 +114,7 @@ json_field_v ROOT "$HEADER" root
 [ -n "$ROOT" ] || die "not inside a git repository"
 json_field_v MAIN "$HEADER" main
 json_field_v DEVELOP "$HEADER" develop
-json_field_v RELEASE_PREFIX "$HEADER" release
 json_field_v BACKMERGE_PREFIX "$HEADER" backmerge
-RELEASE_PREFIX=${RELEASE_PREFIX:-release/}
 BACKMERGE_PREFIX=${BACKMERGE_PREFIX:-backmerge/}
 CARRIER="$BACKMERGE_PREFIX$MAIN"
 # by construction, never a write to main or develop
@@ -150,13 +148,12 @@ esac
 
 MAIN_SHA=$(git rev-parse --verify -q "refs/remotes/origin/$MAIN^{commit}") || die "origin/$MAIN not found; fetch origin first"
 
-REFS=$(git for-each-ref --contains "$MAIN_SHA" --format='%(refname)' refs/remotes/origin) || die "git for-each-ref failed"
-while IFS= read -r ref; do
-  case "$ref" in
-    "refs/remotes/origin/$RELEASE_PREFIX"*)
-      finish skipped-release-open "" "${ref#refs/remotes/origin/} already carries $MAIN's commits; they reach $DEVELOP when it finishes" ;;
-  esac
-done <<<"$REFS"
+# the doctor names an open release that took the hotfix back-merge (a release
+# merely cut from main contains main too, but carries nothing)
+json_field_v CARRIED_BY "$FINDING" carriedBy
+if [ -n "$CARRIED_BY" ]; then
+  finish skipped-release-open "" "$CARRIED_BY already carries $MAIN's commits; they reach $DEVELOP when it finishes"
+fi
 
 # --- an open back-merge PR (ours or a finish's) is reused, never doubled ------
 # Fork PRs never count: their headRefName carries no owner, so a contributor's
